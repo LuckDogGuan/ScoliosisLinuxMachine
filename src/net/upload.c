@@ -40,16 +40,14 @@ static cJSON *request(const Config *config, const char *route, const char *metho
     }
     args[at++] = url;
     args[at] = NULL;
-    int result = run_command(args);
+    (void)run_command(args);
     cJSON *json = NULL;
-    if (!result) {
-        FILE *file = fopen(output, "rb");
-        if (file) {
-            char body[8192];
-            size_t len = fread(body, 1, sizeof(body) - 1, file);
-            if (feof(file)) { body[len] = 0; json = cJSON_Parse(body); }
-            fclose(file);
-        }
+    FILE *file = fopen(output, "rb");
+    if (file) {
+        char body[8192];
+        size_t len = fread(body, 1, sizeof(body) - 1, file);
+        if (feof(file) && len) { body[len] = 0; json = cJSON_Parse(body); }
+        fclose(file);
     }
     unlink(output);
     return json;
@@ -76,6 +74,7 @@ int http_hello(const Config *config, const char *ip, int *paired) {
     cJSON *data = cJSON_CreateObject();
     if (!data) return -1;
     cJSON_AddStringToObject(data, "device_id", config->device_id);
+    cJSON_AddStringToObject(data, "version", INSTRUMENT_VERSION);
     cJSON_AddStringToObject(data, "ip", ip);
     cJSON_AddStringToObject(data, "ssid", config->wifi_ssid);
     cJSON_AddNumberToObject(data, "rssi_dbm", wifi_rssi());
@@ -86,6 +85,8 @@ int http_hello(const Config *config, const char *ip, int *paired) {
     cJSON_Delete(data);
     if (!response) return -1;
     int ok = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "ok"));
+    const cJSON *received = cJSON_GetObjectItemCaseSensitive(response, "received");
+    if (received && cJSON_IsFalse(received)) ok = 0;
     const cJSON *value = cJSON_GetObjectItemCaseSensitive(response, "paired");
     if (ok && cJSON_IsBool(value)) *paired = cJSON_IsTrue(value);
     else ok = 0;
@@ -93,16 +94,73 @@ int http_hello(const Config *config, const char *ip, int *paired) {
     return ok ? 0 : -1;
 }
 
-int http_poll(const Config *config, int *capture) {
-    char header[100];
-    snprintf(header, sizeof(header), "Device-ID: %s", config->device_id);
+static int copy_id(const cJSON *value, char *out, size_t size) {
+    out[0] = 0;
+    if (!cJSON_IsString(value) || !value->valuestring) return 0;
+    if (strlen(value->valuestring) >= size) return -1;
+    strcpy(out, value->valuestring);
+    return 0;
+}
+
+static int device_header(const Config *config, char *header, size_t size) {
+    int n = snprintf(header, size, "Device-ID: %s", config->device_id);
+    return n > 0 && (size_t)n < size ? 0 : -1;
+}
+
+int http_poll(const Config *config, int *capture, char *command_id, size_t command_n) {
+    *capture = 0;
+    if (command_n) command_id[0] = 0;
+    char header[160];
+    if (device_header(config, header, sizeof(header))) return -1;
     const char *headers[] = {header, NULL};
     cJSON *response = request(config, "/api/v1/pending-command", NULL, headers, 5);
     if (!response) return -1;
     const cJSON *command = cJSON_GetObjectItemCaseSensitive(response, "command");
     int ok = cJSON_IsString(command) && command->valuestring &&
              (!strcmp(command->valuestring, "capture") || !strcmp(command->valuestring, "none"));
-    if (ok) *capture = !strcmp(command->valuestring, "capture");
+    if (ok) {
+        *capture = !strcmp(command->valuestring, "capture");
+        if (copy_id(cJSON_GetObjectItemCaseSensitive(response, "command_id"), command_id, command_n)) ok = 0;
+    }
+    cJSON_Delete(response);
+    return ok ? 0 : -1;
+}
+
+int http_command_receipt(const Config *config, char *command_id, size_t command_n,
+                         int *capture, int *acked, int *started) {
+    *capture = 0;
+    *acked = 0;
+    *started = 0;
+    if (command_n) command_id[0] = 0;
+    char header[160];
+    if (device_header(config, header, sizeof(header))) return -1;
+    const char *headers[] = {header, NULL};
+    cJSON *response = request(config, "/api/v1/command-receipt", NULL, headers, 5);
+    if (!response) return -1;
+    const cJSON *command = cJSON_GetObjectItemCaseSensitive(response, "command");
+    int ok = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "ok")) &&
+             cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "received")) &&
+             cJSON_IsString(command) && command->valuestring;
+    if (ok) {
+        *capture = !strcmp(command->valuestring, "capture");
+        *acked = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "acked"));
+        *started = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "started"));
+        if (copy_id(cJSON_GetObjectItemCaseSensitive(response, "command_id"), command_id, command_n)) ok = 0;
+    }
+    cJSON_Delete(response);
+    return ok ? 0 : -1;
+}
+
+int http_command_ack(const Config *config, const char *command_id) {
+    cJSON *data = cJSON_CreateObject();
+    if (!data) return -1;
+    cJSON_AddStringToObject(data, "device_id", config->device_id);
+    cJSON_AddStringToObject(data, "command_id", command_id);
+    cJSON *response = post_json(config, "/api/v1/command/ack", data);
+    cJSON_Delete(data);
+    if (!response) return -1;
+    int ok = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "ok")) &&
+             cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "received"));
     cJSON_Delete(response);
     return ok ? 0 : -1;
 }
@@ -117,7 +175,7 @@ int http_capture_start(const Config *config, const char *capture_id) {
     if (!response) return -1;
     int ok = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "ok"));
     cJSON_Delete(response);
-    return ok ? 0 : -1;
+    return ok ? 0 : -2;
 }
 
 static int send_all(int fd, const void *buffer, size_t length) {
@@ -230,6 +288,24 @@ int http_upload(const Config *config, const char *capture_id, const char *path) 
     cJSON *json = cJSON_ParseWithLength(start, (size_t)(end - start + 1));
     if (!json) { fputs("upload response: invalid JSON\n", stderr); return -1; }
     ok = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "ok"));
+    const cJSON *stored = cJSON_GetObjectItemCaseSensitive(json, "stored");
+    if (stored && !cJSON_IsTrue(stored)) ok = 0;
     cJSON_Delete(json);
+    return ok ? 0 : -1;
+}
+
+int http_file_stored(const Config *config, const char *capture_id, int *stored) {
+    *stored = 0;
+    char header[160], route[256];
+    if (device_header(config, header, sizeof(header))) return -1;
+    int n = snprintf(route, sizeof(route), "/api/v1/captures/%s/receipt", capture_id);
+    if (n < 0 || (size_t)n >= sizeof(route)) return -1;
+    const char *headers[] = {header, NULL};
+    cJSON *response = request(config, route, NULL, headers, 5);
+    if (!response) return -1;
+    if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "stored"))) *stored = 1;
+    int ok = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "ok"));
+    cJSON_Delete(response);
+    if (*stored) return 0;
     return ok ? 0 : -1;
 }

@@ -224,7 +224,7 @@ int capture_record(const Config *config, const char *capture_id) {
         syslog(LOG_ERR, "recorded MP4 failed basic validation: %s", source);
         return -1;
     }
-    int n = snprintf(temp, sizeof(temp), "%s/%s.tmp", PENDING_DIR, capture_id);
+    int n = snprintf(temp, sizeof(temp), "%s/%s.tmp", WRITING_DIR, capture_id);
     if (n < 0 || (size_t)n >= sizeof(temp)) return -1;
     n = snprintf(final, sizeof(final), "%s/%s.mp4", PENDING_DIR, capture_id);
     if (n < 0 || (size_t)n >= sizeof(final) || !access(temp, F_OK) || !access(final, F_OK)) return -1;

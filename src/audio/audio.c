@@ -25,9 +25,13 @@ int audio_play(const char *name) {
     if (clock_gettime(CLOCK_MONOTONIC, &clock_time)) return -1;
     time_t now = clock_time.tv_sec;
     if (last_played[index] && now - last_played[index] < 30) return 0;
-    char path[160];
+    char path[192];
     int n = snprintf(path, sizeof(path), "%s/%s.wav", SOUND_DIR, name);
-    if (n < 0 || (size_t)n >= sizeof(path) || access(path, R_OK)) return -1;
+    if (n < 0 || (size_t)n >= sizeof(path)) return -1;
+    if (access(path, R_OK)) {
+        n = snprintf(path, sizeof(path), "%s/%s.wav", LEGACY_SOUND_DIR, name);
+        if (n < 0 || (size_t)n >= sizeof(path) || access(path, R_OK)) return -1;
+    }
     char *const args[] = {"aplay", "-q", "-D", "plughw:0,0", path, NULL};
     int result = run_command(args);
     if (!result) last_played[index] = now;
