@@ -1,0 +1,6 @@
+/instrument_app
+/instrument_app_host
+/sounds/
+/config.json
+/tests/__pycache__/
+/.gitnexus/
