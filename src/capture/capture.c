@@ -234,5 +234,10 @@ int capture_record(const Config *config, const char *capture_id) {
     int synced = fsync(file);
     close(file);
     if (synced) return -1;
+    int directory = open(PENDING_DIR, O_RDONLY | O_DIRECTORY);
+    if (directory < 0) return -1;
+    synced = fsync(directory);
+    close(directory);
+    if (synced) return -1;
     return storage_write_metadata(config, capture_id);
 }

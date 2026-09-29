@@ -63,8 +63,43 @@ int storage_prepare(void) {
 
 long storage_free_mb(void) {
     struct statvfs info;
-    if (statvfs("/userdata", &info)) return -1;
+    if (statvfs(PENDING_DIR, &info)) return -1;
     return (long)((unsigned long long)info.f_bavail * info.f_frsize / (1024 * 1024));
+}
+
+long storage_total_mb(void) {
+    struct statvfs info;
+    if (statvfs(PENDING_DIR, &info)) return -1;
+    return (long)((unsigned long long)info.f_blocks * info.f_frsize / (1024 * 1024));
+}
+
+int storage_memory_mb(long *available, long *total) {
+    FILE *file = fopen("/proc/meminfo", "r");
+    if (!file) return -1;
+    char line[128];
+    long free_kb = -1, total_kb = -1;
+    while (fgets(line, sizeof(line), file)) {
+        (void)sscanf(line, "MemAvailable: %ld kB", &free_kb);
+        (void)sscanf(line, "MemTotal: %ld kB", &total_kb);
+    }
+    fclose(file);
+    if (free_kb < 0 || total_kb <= 0) return -1;
+    *available = free_kb / 1024;
+    *total = total_kb / 1024;
+    return 0;
+}
+
+int storage_pending_count(void) {
+    DIR *dir = opendir(PENDING_DIR);
+    if (!dir) return -1;
+    int count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir))) {
+        size_t len = strlen(entry->d_name);
+        if (len > 4 && !strcmp(entry->d_name + len - 4, ".mp4")) count++;
+    }
+    closedir(dir);
+    return count;
 }
 
 int storage_capture_id(const Config *config, char *out, size_t size) {
@@ -119,8 +154,12 @@ int storage_write_metadata(const Config *config, const char *capture_id) {
              fsync(fileno(file)) == 0;
     if (fclose(file)) ok = 0;
     cJSON_free(json);
-    if (!ok) return -1;
-    return rename(temp, path);
+    if (!ok || rename(temp, path)) return -1;
+    int directory = open(PENDING_DIR, O_RDONLY | O_DIRECTORY);
+    if (directory < 0) return -1;
+    int synced = fsync(directory);
+    close(directory);
+    return synced ? -1 : 0;
 }
 
 static const char *phase_name(int phase) {
@@ -176,9 +215,15 @@ int storage_command_save(const char *command_id, const char *capture_id, int pha
     FILE *file = fopen(temp, "wb");
     if (!file) { cJSON_free(json); return -1; }
     size_t len = strlen(json);
-    int ok = fwrite(json, 1, len, file) == len && fflush(file) == 0;
+    int ok = fwrite(json, 1, len, file) == len && fflush(file) == 0 &&
+             fsync(fileno(file)) == 0;
     if (fclose(file)) ok = 0;
     cJSON_free(json);
     if (!ok) { unlink(temp); return -1; }
-    return rename(temp, STATE_DIR "/command.json");
+    if (rename(temp, STATE_DIR "/command.json")) return -1;
+    int directory = open(STATE_DIR, O_RDONLY | O_DIRECTORY);
+    if (directory < 0) return -1;
+    int synced = fsync(directory);
+    close(directory);
+    return synced ? -1 : 0;
 }

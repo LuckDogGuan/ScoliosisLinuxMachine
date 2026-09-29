@@ -1,5 +1,6 @@
 #include "app.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -44,4 +45,35 @@ int wifi_rssi(void) {
     }
     fclose(file);
     return rssi;
+}
+
+int wifi_gateway_reachable(void) {
+    FILE *routes = fopen("/proc/net/route", "r");
+    if (!routes) return -1;
+    char line[256], iface[16];
+    unsigned long destination, gateway;
+    unsigned int flags;
+    int result = -1;
+    while (fgets(line, sizeof(line), routes)) {
+        if (sscanf(line, "%15s %lx %lx %x", iface, &destination, &gateway, &flags) != 4 ||
+            strcmp(iface, "wlan0") || destination || !(flags & 1)) continue;
+        struct in_addr address = {.s_addr = (in_addr_t)gateway};
+        char host[INET_ADDRSTRLEN];
+        if (inet_ntop(AF_INET, &address, host, sizeof(host))) {
+            char *const args[] = {"arping", "-f", "-q", "-c", "1", "-w", "2",
+                                  "-I", "wlan0", host, NULL};
+            result = run_command(args) == 0;
+        }
+        break;
+    }
+    fclose(routes);
+    return result;
+}
+
+int wifi_reconnect(void) {
+    char *const disconnect[] = {"wpa_cli", "-i", "wlan0", "disconnect", NULL};
+    char *const reconnect[] = {"wpa_cli", "-i", "wlan0", "reconnect", NULL};
+    int first = run_command(disconnect);
+    int second = run_command(reconnect);
+    return first || second ? -1 : 0;
 }

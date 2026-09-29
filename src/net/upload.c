@@ -10,6 +10,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <syslog.h>
 #include <unistd.h>
 
 static cJSON *request(const Config *config, const char *route, const char *method_file,
@@ -70,15 +71,32 @@ static cJSON *post_json(const Config *config, const char *route, const cJSON *pa
     return response;
 }
 
-int http_hello(const Config *config, const char *ip, int *paired) {
+static int copy_id(const cJSON *value, char *out, size_t size);
+
+int http_hello(Config *config, const char *ip, const char *event_id, int *paired,
+               char *pair_event, size_t pair_n, char *unpair_event, size_t unpair_n) {
+    if (pair_n) pair_event[0] = 0;
+    if (unpair_n) unpair_event[0] = 0;
     cJSON *data = cJSON_CreateObject();
     if (!data) return -1;
     cJSON_AddStringToObject(data, "device_id", config->device_id);
+    cJSON_AddStringToObject(data, "event_id", event_id);
     cJSON_AddStringToObject(data, "version", INSTRUMENT_VERSION);
     cJSON_AddStringToObject(data, "ip", ip);
     cJSON_AddStringToObject(data, "ssid", config->wifi_ssid);
-    cJSON_AddNumberToObject(data, "rssi_dbm", wifi_rssi());
-    cJSON_AddNumberToObject(data, "storage_free_mb", storage_free_mb());
+    cJSON_AddNumberToObject(data, "volume", config->volume);
+    int rssi = wifi_rssi();
+    if (rssi > -100 && rssi < 0) cJSON_AddNumberToObject(data, "rssi_dbm", rssi);
+    long free_mb = storage_free_mb(), total_mb = storage_total_mb();
+    if (free_mb >= 0) cJSON_AddNumberToObject(data, "storage_free_mb", free_mb);
+    if (total_mb > 0) cJSON_AddNumberToObject(data, "storage_total_mb", total_mb);
+    long available_mb, memory_total_mb;
+    if (!storage_memory_mb(&available_mb, &memory_total_mb)) {
+        cJSON_AddNumberToObject(data, "memory_available_mb", available_mb);
+        cJSON_AddNumberToObject(data, "memory_total_mb", memory_total_mb);
+    }
+    int pending = storage_pending_count();
+    if (pending >= 0) cJSON_AddNumberToObject(data, "pending_count", pending);
     cJSON_AddStringToObject(data, "camera", "ISG1321");
     cJSON_AddStringToObject(data, "battery", battery_present() ? "present" : "absent");
     cJSON *response = post_json(config, "/api/v1/hello", data);
@@ -88,8 +106,59 @@ int http_hello(const Config *config, const char *ip, int *paired) {
     const cJSON *received = cJSON_GetObjectItemCaseSensitive(response, "received");
     if (received && cJSON_IsFalse(received)) ok = 0;
     const cJSON *value = cJSON_GetObjectItemCaseSensitive(response, "paired");
-    if (ok && cJSON_IsBool(value)) *paired = cJSON_IsTrue(value);
+    if (ok && cJSON_IsBool(value)) {
+        *paired = cJSON_IsTrue(value);
+        if (copy_id(cJSON_GetObjectItemCaseSensitive(response, "pair_event_id"), pair_event, pair_n) ||
+            copy_id(cJSON_GetObjectItemCaseSensitive(response, "unpair_event_id"), unpair_event, unpair_n)) ok = 0;
+
+        cJSON *vol_item = cJSON_GetObjectItemCaseSensitive(response, "volume");
+        if (cJSON_IsNumber(vol_item)) {
+            int target_vol = vol_item->valueint;
+            if (target_vol >= 0 && target_vol <= 30 && target_vol != config->volume) {
+                printf("[APP] Host requested volume change: %d -> %d\n", config->volume, target_vol);
+                fflush(stdout);
+                syslog(LOG_INFO, "[APP] Host requested volume change: %d -> %d", config->volume, target_vol);
+                audio_set_volume(target_vol);
+                config->volume = target_vol;
+                const char *path = config->config_path[0] ? config->config_path : "/userdata/instrument/config.json";
+                if (config_save_volume(path, target_vol) != 0) {
+                    syslog(LOG_WARNING, "[APP] Failed to persist volume change to %s", path);
+                }
+            }
+        }
+    }
     else ok = 0;
+    cJSON_Delete(response);
+    return ok ? 0 : -1;
+}
+
+int http_event_ack(const Config *config, const char *event_id, const char *kind) {
+    cJSON *data = cJSON_CreateObject();
+    if (!data) return -1;
+    cJSON_AddStringToObject(data, "device_id", config->device_id);
+    cJSON_AddStringToObject(data, "event_id", event_id);
+    cJSON_AddStringToObject(data, "kind", kind);
+    cJSON *response = post_json(config, "/api/v1/device/event-ack", data);
+    cJSON_Delete(data);
+    if (!response) return -1;
+    const cJSON *id = cJSON_GetObjectItemCaseSensitive(response, "event_id");
+    int ok = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "ok")) &&
+             cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "received")) &&
+             cJSON_IsString(id) && id->valuestring && !strcmp(id->valuestring, event_id);
+    cJSON_Delete(response);
+    return ok ? 0 : -1;
+}
+
+int http_capture_status(const Config *config, const char *capture_id, const char *phase) {
+    cJSON *data = cJSON_CreateObject();
+    if (!data) return -1;
+    cJSON_AddStringToObject(data, "device_id", config->device_id);
+    cJSON_AddStringToObject(data, "capture_id", capture_id);
+    cJSON_AddStringToObject(data, "phase", phase);
+    cJSON *response = post_json(config, "/api/v1/capture/status", data);
+    cJSON_Delete(data);
+    if (!response) return -1;
+    int ok = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "ok"));
     cJSON_Delete(response);
     return ok ? 0 : -1;
 }
@@ -294,8 +363,11 @@ int http_upload(const Config *config, const char *capture_id, const char *path) 
     return ok ? 0 : -1;
 }
 
-int http_file_stored(const Config *config, const char *capture_id, int *stored) {
+int http_file_stored(const Config *config, const char *capture_id, int *stored,
+                     long long *size_bytes, char *sha256, size_t sha_n) {
     *stored = 0;
+    *size_bytes = -1;
+    if (sha_n) sha256[0] = 0;
     char header[160], route[256];
     if (device_header(config, header, sizeof(header))) return -1;
     int n = snprintf(route, sizeof(route), "/api/v1/captures/%s/receipt", capture_id);
@@ -303,9 +375,18 @@ int http_file_stored(const Config *config, const char *capture_id, int *stored) 
     const char *headers[] = {header, NULL};
     cJSON *response = request(config, route, NULL, headers, 5);
     if (!response) return -1;
-    if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "stored"))) *stored = 1;
+    const cJSON *id = cJSON_GetObjectItemCaseSensitive(response, "capture_id");
+    const cJSON *size = cJSON_GetObjectItemCaseSensitive(response, "size_bytes");
+    const cJSON *hash = cJSON_GetObjectItemCaseSensitive(response, "sha256");
     int ok = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "ok"));
+    if (ok && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "stored")) &&
+        cJSON_IsString(id) && id->valuestring && !strcmp(id->valuestring, capture_id) &&
+        cJSON_IsNumber(size) && size->valuedouble >= 0 &&
+        cJSON_IsString(hash) && hash->valuestring && strlen(hash->valuestring) == 64 && sha_n >= 65) {
+        *stored = 1;
+        *size_bytes = (long long)size->valuedouble;
+        strcpy(sha256, hash->valuestring);
+    }
     cJSON_Delete(response);
-    if (*stored) return 0;
     return ok ? 0 : -1;
 }

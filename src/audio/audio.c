@@ -5,7 +5,9 @@
 #include <unistd.h>
 
 static const char *const sounds[] = {
-    "capture_done", "uploaded", "saved_on_device", "storage_low", "capture_failed"
+    "capture_done", "uploaded", "saved_on_device", "storage_low", "capture_failed",
+    "please_connect", "pair_success", "pair_failed", "wifi_connected",
+    "wifi_disconnected", "pair_disconnected"
 };
 static time_t last_played[sizeof(sounds) / sizeof(sounds[0])];
 

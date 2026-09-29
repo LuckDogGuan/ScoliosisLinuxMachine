@@ -20,12 +20,13 @@ SOURCES = \
 
 all: $(TARGET)
 
-$(TARGET): $(SOURCES) include/app.h
+$(TARGET): $(SOURCES) include/app.h include/config.h
 	$(CC) $(CFLAGS) $(SOURCES) -o $@
 
 check-host:
 	$(MAKE) CC=gcc TARGET=instrument_app_host
 	./instrument_app_host --check-config config.example.json
 	python3 tests/test_upload.py
+	python3 tests/test_pending_upload.py
 
 .PHONY: all check-host

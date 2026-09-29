@@ -6,12 +6,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <syslog.h>
 #include <time.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t running = 1;
+static pid_t upload_pid = -1;
+static time_t retry_upload_after = 0;
+static char upload_capture_id[128];
+static char warned_capture_id[128];
 
 static void stop(int signal_number) { (void)signal_number; running = 0; }
 
@@ -40,9 +45,48 @@ static void clear_command(char *command_id, char *capture_id, int *phase) {
     *phase = COMMAND_NONE;
 }
 
-static int has_pending_mp4(void) {
+static int capture_pending(const char *capture_id) {
     char path[384];
-    return storage_next_pending(path, sizeof(path)) == 1;
+    struct stat info;
+    int n = snprintf(path, sizeof(path), "%s/%s.mp4", PENDING_DIR, capture_id);
+    return n > 0 && (size_t)n < sizeof(path) && !stat(path, &info) && S_ISREG(info.st_mode);
+}
+
+static int file_digest(const char *path, char hash[65], long long *size_bytes) {
+    struct stat info;
+    if (stat(path, &info) || !S_ISREG(info.st_mode)) return -1;
+    int pipe_fd[2];
+    if (pipe(pipe_fd)) return -1;
+    pid_t child = fork();
+    if (child < 0) { close(pipe_fd[0]); close(pipe_fd[1]); return -1; }
+    if (!child) {
+        close(pipe_fd[0]);
+        if (dup2(pipe_fd[1], STDOUT_FILENO) < 0) _exit(127);
+        close(pipe_fd[1]);
+        execlp("sha256sum", "sha256sum", path, (char *)NULL);
+        _exit(127);
+    }
+    close(pipe_fd[1]);
+    char output[128];
+    size_t count = 0;
+    while (count < 65) {
+        ssize_t got = read(pipe_fd[0], output + count, sizeof(output) - count);
+        if (got < 0 && errno == EINTR) continue;
+        if (got <= 0) break;
+        count += (size_t)got;
+    }
+    close(pipe_fd[0]);
+    int status;
+    while (waitpid(child, &status, 0) < 0) if (errno != EINTR) return -1;
+    if (count < 65 || !WIFEXITED(status) || WEXITSTATUS(status)) return -1;
+    for (int i = 0; i < 64; i++) {
+        char c = output[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return -1;
+    }
+    memcpy(hash, output, 64);
+    hash[64] = 0;
+    *size_bytes = (long long)info.st_size;
+    return 0;
 }
 
 static int has_writing_file(void) {
@@ -72,16 +116,36 @@ static int remove_capture_files(const char *capture_id, const char *path) {
 }
 
 static int upload_and_remove(const Config *config, const char *capture_id, const char *path) {
-    if (!http_upload(config, capture_id, path))
-        return remove_capture_files(capture_id, path);
+    char local_hash[65], remote_hash[65];
+    long long local_size, remote_size;
+    if (file_digest(path, local_hash, &local_size)) return -1;
     int stored = 0;
-    if (!http_file_stored(config, capture_id, &stored) && stored == 1)
+    if (http_file_stored(config, capture_id, &stored, &remote_size,
+                         remote_hash, sizeof(remote_hash)) || !stored) {
+        (void)http_capture_status(config, capture_id, "uploading");
+        (void)http_upload(config, capture_id, path);
+        stored = 0;
+        (void)http_file_stored(config, capture_id, &stored, &remote_size,
+                               remote_hash, sizeof(remote_hash));
+    }
+    if (stored && local_size == remote_size && !strcmp(local_hash, remote_hash)) {
+        (void)http_capture_status(config, capture_id, "stored");
         return remove_capture_files(capture_id, path);
+    }
+    (void)http_capture_status(config, capture_id, "pending_local");
     syslog(LOG_WARNING, "upload failed: %s", capture_id);
     return -1;
 }
 
+static void spawn_upload(const Config *config, const char *capture_id, const char *path) {
+    upload_pid = fork();
+    if (!upload_pid) _exit(upload_and_remove(config, capture_id, path) ? 1 : 0);
+    if (upload_pid > 0) snprintf(upload_capture_id, sizeof(upload_capture_id), "%s", capture_id);
+    if (upload_pid < 0) syslog(LOG_ERR, "cannot start upload worker: %s", strerror(errno));
+}
+
 static void retry_one_pending(const Config *config) {
+    if (upload_pid > 0) return;
     char path[384], capture_id[128];
     if (storage_next_pending(path, sizeof(path)) != 1) return;
     const char *name = strrchr(path, '/');
@@ -91,12 +155,31 @@ static void retry_one_pending(const Config *config) {
         return;
     memcpy(capture_id, name, length - 4);
     capture_id[length - 4] = 0;
-    (void)upload_and_remove(config, capture_id, path);
+    spawn_upload(config, capture_id, path);
 }
 
-static int refuse_if_low_space(void) {
+static void reap_upload(void) {
+    if (upload_pid <= 0) return;
+    int status;
+    pid_t result = waitpid(upload_pid, &status, WNOHANG);
+    if (!result) return;
+    upload_pid = -1;
+    if (result > 0 && WIFEXITED(status) && !WEXITSTATUS(status))
+        (void)audio_play("uploaded");
+    else {
+        if (strcmp(warned_capture_id, upload_capture_id)) {
+            (void)audio_play("saved_on_device");
+            snprintf(warned_capture_id, sizeof(warned_capture_id), "%s", upload_capture_id);
+        }
+        struct timespec now;
+        if (!clock_gettime(CLOCK_MONOTONIC, &now)) retry_upload_after = now.tv_sec + 10;
+    }
+}
+
+static int refuse_if_low_space(const Config *config) {
     long free_mb = storage_free_mb();
-    if (free_mb < 16) {
+    long expected_mb = ((long)config->bitrate_kbps * config->duration_ms + 7999999) / 8000000;
+    if (free_mb < 16 + 2 * expected_mb) {
         syslog(LOG_WARNING, "capture refused: free space %ld MB", free_mb);
         (void)audio_play("storage_low");
         return -1;
@@ -106,13 +189,8 @@ static int refuse_if_low_space(void) {
 
 static void after_record(const Config *config, const char *capture_id, int network_ready) {
     (void)audio_play("capture_done");
-    char path[384];
-    int n = snprintf(path, sizeof(path), "%s/%s.mp4", PENDING_DIR, capture_id);
-    if (n < 0 || (size_t)n >= sizeof(path)) return;
-    if (!network_ready || upload_and_remove(config, capture_id, path))
-        (void)audio_play("saved_on_device");
-    else
-        (void)audio_play("uploaded");
+    if (network_ready) (void)http_capture_status(config, capture_id, "pending_local");
+    else (void)audio_play("saved_on_device");
 }
 
 static void ack_current(const Config *config, char *command_id, char *capture_id, int *phase) {
@@ -153,7 +231,7 @@ static void apply_receipt(const Config *config, char *command_id, size_t command
 
 static void start_and_record(const Config *config, char *command_id, char *capture_id,
                              size_t capture_n, int *phase, time_t *last_hello) {
-    if (refuse_if_low_space()) return;
+    if (refuse_if_low_space(config)) return;
     if (!capture_id[0]) {
         if (storage_capture_id(config, capture_id, capture_n)) {
             syslog(LOG_ERR, "capture id generation failed");
@@ -180,17 +258,20 @@ static void start_and_record(const Config *config, char *command_id, char *captu
     }
     if (persist(command_id, capture_id, COMMAND_STARTED)) return;
     *phase = COMMAND_STARTED;
+    (void)http_capture_status(config, capture_id, "recording");
     if (capture_record(config, capture_id)) {
         syslog(LOG_ERR, "recording failed: %s", capture_id);
+        (void)http_capture_status(config, capture_id, "failed");
         (void)audio_play("capture_failed");
         return;
     }
     after_record(config, capture_id, 1);
+    clear_command(command_id, capture_id, phase);
     *last_hello = 0;
 }
 
 static void handle_local_capture(const Config *config, int network_ready, time_t *last_hello) {
-    if (refuse_if_low_space()) return;
+    if (refuse_if_low_space(config)) return;
     char capture_id[128];
     if (storage_capture_id(config, capture_id, sizeof(capture_id))) {
         syslog(LOG_ERR, "capture id generation failed");
@@ -205,8 +286,10 @@ static void handle_local_capture(const Config *config, int network_ready, time_t
             return;
         }
     }
+    if (network_ready) (void)http_capture_status(config, capture_id, "recording");
     if (capture_record(config, capture_id)) {
         syslog(LOG_ERR, "recording failed: %s", capture_id);
+        if (network_ready) (void)http_capture_status(config, capture_id, "failed");
         (void)audio_play("capture_failed");
         return;
     }
@@ -215,7 +298,7 @@ static void handle_local_capture(const Config *config, int network_ready, time_t
 }
 
 static void handle_legacy_capture(const Config *config, time_t *last_hello) {
-    if (refuse_if_low_space()) return;
+    if (refuse_if_low_space(config)) return;
     char capture_id[128];
     if (storage_capture_id(config, capture_id, sizeof(capture_id))) {
         syslog(LOG_ERR, "capture id generation failed");
@@ -228,8 +311,10 @@ static void handle_legacy_capture(const Config *config, time_t *last_hello) {
         return;
     }
     if (start == -1) return;
+    (void)http_capture_status(config, capture_id, "recording");
     if (capture_record(config, capture_id)) {
         syslog(LOG_ERR, "recording failed: %s", capture_id);
+        (void)http_capture_status(config, capture_id, "failed");
         (void)audio_play("capture_failed");
         return;
     }
@@ -242,9 +327,14 @@ int main(int argc, char **argv) {
         puts(INSTRUMENT_VERSION);
         return 0;
     }
+    if (argc == 4 && !strcmp(argv[1], "--save-volume")) {
+        int vol = atoi(argv[3]);
+        return config_save_volume(argv[2], vol) ? 1 : 0;
+    }
     const char *config_path = argc > 1 && argv[1][0] != '-' ? argv[1] :
                               "/userdata/instrument/config.json";
     if (argc == 3 && !strcmp(argv[1], "--check-config")) config_path = argv[2];
+    if (argc == 3 && !strcmp(argv[1], "--hello")) config_path = argv[2];
     if (argc == 5 && !strcmp(argv[1], "--upload-file")) config_path = argv[2];
     Config config = {0};
     if (config_load(config_path, &config)) {
@@ -255,12 +345,22 @@ int main(int argc, char **argv) {
         puts("config OK");
         return 0;
     }
+    if (argc == 3 && !strcmp(argv[1], "--hello")) {
+        int paired = 0;
+        char pair_event[128] = {0}, unpair_event[128] = {0};
+        char ip[INET_ADDRSTRLEN] = "127.0.0.1";
+        (void)wifi_address(ip, sizeof(ip));
+        return http_hello(&config, ip, "test-boot-event", &paired,
+                          pair_event, sizeof(pair_event),
+                          unpair_event, sizeof(unpair_event)) ? 1 : 0;
+    }
     openlog("instrument_app", LOG_PID | LOG_CONS, LOG_DAEMON);
     if (argc == 5 && !strcmp(argv[1], "--upload-file"))
         return http_upload(&config, argv[3], argv[4]) ? 1 : 0;
     signal(SIGINT, stop);
     signal(SIGTERM, stop);
     signal(SIGPIPE, SIG_IGN);
+    signal(SIGHUP, SIG_IGN);
     if (storage_prepare()) {
         syslog(LOG_ERR, "cannot create pending directory");
         return 1;
@@ -274,8 +374,17 @@ int main(int argc, char **argv) {
     if (discover_open()) syslog(LOG_ERR, "UDP discover socket failed");
     syslog(LOG_INFO, "instrument %s started; volume %d", INSTRUMENT_VERSION, config.volume);
     int paired = 0;
+    int wifi_seen = 0, wifi_up = 0, hello_seen = 0;
+    char boot_event_id[128];
+    if (storage_capture_id(&config, boot_event_id, sizeof(boot_event_id))) {
+        syslog(LOG_ERR, "cannot generate boot event id");
+        return 1;
+    }
     time_t last_hello = 0;
+    time_t last_gateway_check = 0;
+    int gateway_failures = 0;
     while (running) {
+        reap_upload();
         char command_id[128], capture_id[128];
         int phase = COMMAND_NONE;
         if (storage_command_load(command_id, sizeof(command_id), capture_id, sizeof(capture_id),
@@ -285,7 +394,9 @@ int main(int argc, char **argv) {
             capture_id[0] = 0;
             phase = COMMAND_NONE;
         }
-        if (phase == COMMAND_STARTED && !has_pending_mp4() && !has_writing_file()) {
+        if (phase == COMMAND_STARTED && capture_id[0] && capture_pending(capture_id)) {
+            clear_command(command_id, capture_id, &phase);
+        } else if (phase == COMMAND_STARTED && !has_writing_file()) {
             syslog(LOG_WARNING, "command started but no capture file remains; clearing command");
             clear_command(command_id, capture_id, &phase);
         }
@@ -293,33 +404,65 @@ int main(int argc, char **argv) {
         if (discover_poll(&config)) last_hello = 0;
         char ip[INET_ADDRSTRLEN];
         int local_trigger = button_capture_pressed();
-        if (wifi_address(ip, sizeof(ip))) {
+        int has_wifi_address = !wifi_address(ip, sizeof(ip));
+        struct timespec clock_time;
+        int clock_ok = !clock_gettime(CLOCK_MONOTONIC, &clock_time);
+        time_t now = clock_ok ? clock_time.tv_sec : 0;
+        if (clock_ok && (!last_gateway_check || now - last_gateway_check >= 10)) {
+            int reachable = has_wifi_address ? wifi_gateway_reachable() : 0;
+            if (reachable >= 0) gateway_failures = reachable ? 0 : gateway_failures + 1;
+            last_gateway_check = now;
+            if (gateway_failures >= 3) {
+                syslog(LOG_WARNING, "Wi-Fi gateway ARP failed 3 times; reconnecting wlan0");
+                if (wifi_reconnect()) syslog(LOG_ERR, "Wi-Fi reconnect command failed");
+                gateway_failures = 0;
+                last_hello = 0;
+                paired = 0;
+                light_update(paired);
+                sleep(1);
+                continue;
+            }
+        }
+        if (!has_wifi_address) {
+            if (wifi_up) (void)audio_play("wifi_disconnected");
+            wifi_seen = 1;
+            wifi_up = 0;
             paired = 0;
             light_update(paired);
             if (local_trigger && phase == COMMAND_NONE) handle_local_capture(&config, 0, &last_hello);
             sleep(1);
             continue;
         }
-        struct timespec clock_time;
-        if (clock_gettime(CLOCK_MONOTONIC, &clock_time)) { sleep(1); continue; }
-        time_t now = clock_time.tv_sec;
+        if (!wifi_seen || !wifi_up) (void)audio_play("wifi_connected");
+        wifi_seen = 1;
+        wifi_up = 1;
+        if (!clock_ok) { sleep(1); continue; }
         if (!last_hello || now - last_hello >= 3) {
-            if (http_hello(&config, ip, &paired)) paired = 0;
-            else retry_one_pending(&config);
+            char pair_event[128], unpair_event[128];
+            if (http_hello(&config, ip, boot_event_id, &paired, pair_event,
+                           sizeof(pair_event), unpair_event, sizeof(unpair_event))) paired = 0;
+            else {
+                if (!hello_seen && !paired && !unpair_event[0])
+                    (void)audio_play("please_connect");
+                hello_seen = 1;
+                if (paired && pair_event[0]) {
+                    (void)audio_play("pair_success");
+                    (void)http_event_ack(&config, pair_event, "paired");
+                } else if (!paired && unpair_event[0]) {
+                    (void)audio_play("pair_disconnected");
+                    (void)http_event_ack(&config, unpair_event, "unpaired");
+                }
+                if (paired && now >= retry_upload_after) retry_one_pending(&config);
+            }
             last_hello = now;
             light_update(paired);
-        }
-        if (phase == COMMAND_STARTED && !has_pending_mp4() && !has_writing_file()) {
-            syslog(LOG_WARNING, "command started but no capture file remains; clearing command");
-            clear_command(command_id, capture_id, &phase);
         }
 
         if (local_trigger && phase == COMMAND_NONE)
             handle_local_capture(&config, 1, &last_hello);
 
-        int pending = has_pending_mp4();
         if (paired && !local_trigger) {
-            if (phase == COMMAND_NONE && !pending) {
+            if (phase == COMMAND_NONE) {
                 int remote_capture = 0;
                 char poll_id[128];
                 if (http_poll(&config, &remote_capture, poll_id, sizeof(poll_id)))
@@ -333,12 +476,13 @@ int main(int argc, char **argv) {
                     apply_receipt(&config, command_id, sizeof(command_id), capture_id, &phase);
             } else if (phase == COMMAND_SEEN)
                 apply_receipt(&config, command_id, sizeof(command_id), capture_id, &phase);
-            if (phase == COMMAND_ACKED && !has_pending_mp4())
+            if (phase == COMMAND_ACKED)
                 start_and_record(&config, command_id, capture_id, sizeof(capture_id),
                                  &phase, &last_hello);
         }
         sleep(1);
     }
+    if (upload_pid > 0) (void)waitpid(upload_pid, NULL, 0);
     closelog();
     return 0;
 }
