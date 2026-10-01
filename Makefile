@@ -1,21 +1,32 @@
 CC = /home/guanjx/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-gcc
 TARGET = instrument_app
 CFLAGS += -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O2
-CFLAGS += -Iinclude -Ithird_party/cjson
+CFLAGS += -Iinclude -Ithird_party/cjson -Ithird_party/lwbtn/include
 
-# 分类：app 主循环，net 发现与上传，capture 录像，storage 文件，audio 喇叭，board 按键灯电池，config 配置
+# Application policy -> middleware services -> Linux/Luckfox platform adapters
 SOURCES = \
 	src/app/app_controller.c \
+	src/app/policy.c \
+	src/middleware/legacy.c \
+	src/platform/process.c \
+	src/platform/trace.c \
+	src/platform/luckfox_gpio.c \
+	src/platform/luckfox_camera.c \
+	src/app/runtime_v3.c \
+	src/middleware/persistence.c \
+	src/platform/clock.c \
+	src/middleware/buttons.c \
+	third_party/lwbtn/lwbtn.c \
 	src/config/config.c \
-	src/net/wifi.c \
-	src/net/upload.c \
-	src/net/discover.c \
+	src/platform/luckfox_wifi.c \
+	src/middleware/upload.c \
+	src/middleware/discover.c \
 	src/storage/storage.c \
-	src/audio/audio.c \
-	src/capture/capture.c \
-	src/board/battery.c \
-	src/board/button.c \
-	src/board/light.c \
+	src/platform/luckfox_audio.c \
+	src/middleware/capture.c \
+	src/platform/luckfox_battery.c \
+	src/platform/luckfox_button.c \
+	src/platform/luckfox_light.c \
 	third_party/cjson/cJSON.c
 
 all: $(TARGET)
@@ -28,5 +39,11 @@ check-host:
 	./instrument_app_host --check-config config.example.json
 	python3 tests/test_upload.py
 	python3 tests/test_pending_upload.py
+	gcc $(CFLAGS) tests/test_buttons.c src/middleware/buttons.c src/platform/luckfox_gpio.c third_party/lwbtn/lwbtn.c -o tests/.buttons_check
+	./tests/.buttons_check
 
 .PHONY: all check-host
+
+# Separate in-process RKiPC adapter; never linked into the application.
+mux-adapter:
+	$(CC) -shared -fPIC -Wall -Wextra -Werror -O2 src/platform/luckfox_mux_adapter.c -pthread -o luckfox_mux_adapter.so

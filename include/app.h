@@ -1,28 +1,30 @@
 #ifndef INSTRUMENT_APP_H
 #define INSTRUMENT_APP_H
 
-/* 源码按目录分模块：
- * src/app      主循环
- * src/net      UDP 发现、HTTP 回执、Wi-Fi
- * src/capture  录像
- * src/storage  目录、待传文件、命令状态
- * src/audio    喇叭
- * src/board    电池、按键、灯
- * src/config   配置
+/* src/app: pairing, permissions and capture policy (one V3 state machine)
+ * src/middleware: UDP/HTTP, debounce, recording lifecycle and durable JSON
+ * src/storage, src/config: durable business data and configuration
+ * src/platform: GPIO, RKiPC, ALSA, Wi-Fi, clocks, filesystem/process adapters
  */
 
 #include <stddef.h>
 
-#define INSTRUMENT_VERSION "0.0.1"
+#define INSTRUMENT_VERSION "3.1.0"
+#ifndef INSTRUMENT_ROOT
 #define INSTRUMENT_ROOT "/opt/instrument"
+#endif
 #define STATE_DIR INSTRUMENT_ROOT "/state"
 #define SOUND_DIR INSTRUMENT_ROOT "/sounds"
 #define LEGACY_SOUND_DIR "/userdata/sounds"
 #define WRITING_DIR INSTRUMENT_ROOT "/capture/writing"
 #define PENDING_DIR INSTRUMENT_ROOT "/capture/pending"
 #define LEGACY_PENDING_DIR "/userdata/capture/pending"
+#ifndef VIDEO_DIR
 #define VIDEO_DIR "/video0"
+#endif
+#ifndef DISCOVER_PORT
 #define DISCOVER_PORT 37020
+#endif
 
 enum {
     COMMAND_NONE = 0,
@@ -57,7 +59,8 @@ int storage_write_metadata(const Config *config, const char *capture_id);
 int storage_command_load(char *command_id, size_t command_n, char *capture_id, size_t capture_n, int *phase);
 int storage_command_save(const char *command_id, const char *capture_id, int phase);
 int audio_play(const char *name);
-void audio_set_volume(int volume);
+int audio_set_volume(int volume);
+int audio_get_volume(void);
 int http_hello(Config *config, const char *ip, const char *event_id, int *paired,
                char *pair_event, size_t pair_n, char *unpair_event, size_t unpair_n);
 int http_event_ack(const Config *config, const char *event_id, const char *kind);

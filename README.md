@@ -1,5 +1,15 @@
 # Pico Zero instrument_app
 
+## 当前版本：2026-10-01 / 3.1.0
+
+以下旧版章节保留为历史参考；当前默认运行 V3。真实启动与部署目录为 `/opt/instrument`，配置默认 `/opt/instrument/config.json`，待传视频 `/opt/instrument/capture/pending`；通过 `/oem/usr/etc/init.d/S80instrument` 启动，实际系统入口为 `/RkLunch.sh`。设置 `INSTRUMENT_LEGACY` 才运行旧兼容入口。
+
+应用层 `src/app` 管理唯一状态机和拍摄规则；中间层 `src/middleware` 管理协议、队列、消抖、录像生命周期和持久化；平台层 `src/platform` 封装 GPIO、RKiPC、音频、Wi-Fi、时钟与进程。下一块 Linux 板优先替换平台文件，继续复用业务代码、cJSON 和 LwBTN。
+
+中键长按 3 秒开放配对窗口或解除已有配对，松开后才能再次触发；左右键长按 1.5 秒按电脑明确准备的学生开录，松开任一键停录。开机和重连不自动开启拍摄许可。短片和未知视频自动传回电脑核对，不猜测学生、不推进名单。
+
+`make`、`make mux-adapter` 编译业务程序和独立 RKiPC 关键帧适配库；`make check-host` 验证主机行为。适配库只在启动 RKiPC 时设置 `LD_PRELOAD`，不能全局注入。完整操作、日志、验收与回滚见 Windows 项目 `调试/软件架构/拍摄配对调试改造_实施与验收_2026-10-01.md`。
+
 下位机业务程序，C/uClibc。仪器不存学生名单、姓名或 Wi-Fi 密码。电脑端对照 `D:\code\Scoliosis\ScoliosisFlutter`。产品范围以 2026-09-28 已确认的单设备 V1 为准：一台电脑、一台当前仪器；多电脑抢连和首次凭据交换本版不做。
 
 ## 源码
@@ -87,3 +97,7 @@ UDP `37020` 收到合法 `discover` 后，单播 `here`（版本 2、原样 nonc
 - 同日交叉编译和 `make check-host` 曾通过。源码拆到 `src/` 之后，提交前需要重新跑这两项；通过仍然不等于实板录像通过。
 - 板上 `DAC LINEOUT Volume` 读回过 10。
 - 发现程序曾在板上监听到 `udp 0.0.0.0:37020`，但没有收到发现包。记录见 Windows 工程 `调试/记录/UDP广播发现_2026-09-28.md`。
+
+## WSL2 版本归档
+
+源码修改和 Git 写操作均在本 WSL2 工程执行。当前版本包在 `image/v3.1.0-20261001/`，包括程序、关键帧库、新 volume_test 和全部当前声音、配置样例、启动脚本及 SHA-256；对应 Git 标签 `instrument-v3.1.0-20261001`。改造前源码与板端自报 0.0.1 的备份在 `image/baseline-20261001/`。以后通过 `scripts/package_image.sh` 创建新的版本目录。进度见 `CHANGELOG.md`，版本使用与回退见 `image/README.md`。

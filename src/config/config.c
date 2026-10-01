@@ -145,9 +145,11 @@ int config_save_volume(const char *path, int volume) {
             memcpy(dir_buf, path, dirlen);
             dir_buf[dirlen] = 0;
             int dfd = open(dir_buf, O_RDONLY | O_DIRECTORY);
+            if (dfd < 0) return -1;
             if (dfd >= 0) {
-                (void)fsync(dfd);
+                int synced = fsync(dfd);
                 close(dfd);
+                if (synced) return -1;
             }
         }
     }

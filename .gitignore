@@ -1,6 +1,14 @@
 /instrument_app
 /instrument_app_host
+/luckfox_mux_adapter.so
 /sounds/
 /config.json
 /tests/__pycache__/
 /.gitnexus/
+
+/tests/.buttons_check
+/tests/.struct_sizes.o
+/tests/.baseline_app
+
+# Historical local archives; release archives are tracked under image/
+/baseline/

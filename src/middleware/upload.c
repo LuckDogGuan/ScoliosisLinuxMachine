@@ -1,4 +1,4 @@
-#include "app.h"
+#include "v3.h"
 #include "cJSON.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -310,15 +310,24 @@ int http_upload(const Config *config, const char *capture_id, const char *path) 
     char host[64];
     int fd = connect_pc(config, host, sizeof(host));
     if (fd < 0) { fprintf(stderr, "upload connect: %s\n", strerror(errno)); fclose(file); return -1; }
+    char metadata_path[384];
+    snprintf(metadata_path, sizeof(metadata_path), "%s/%s.json", PENDING_DIR, capture_id);
+    cJSON *metadata = v3_read_json(metadata_path);
+    const cJSON *duration = cJSON_GetObjectItemCaseSensitive(metadata, "duration_ms");
+    int actual_duration = cJSON_IsNumber(duration) ? duration->valueint : config->duration_ms;
+    const char *grant = getenv("INSTRUMENT_UPLOAD_GRANT");
+    char grant_header[192] = "";
+    if (grant) snprintf(grant_header, sizeof(grant_header), "Grant-ID: %s\r\n", grant);
+    cJSON_Delete(metadata);
     char header[1024];
     int n = snprintf(header, sizeof(header),
         "POST /api/v1/capture/file HTTP/1.1\r\n"
         "Host: %s\r\nConnection: close\r\nContent-Type: video/mp4\r\n"
         "Content-Length: %lld\r\nDevice-ID: %s\r\nCapture-ID: %s\r\n"
         "Width: %d\r\nHeight: %d\r\nFps: %d\r\nDuration-Ms: %d\r\n"
-        "Codec: h265\r\nContainer: mp4\r\n\r\n",
+        "Codec: h265\r\nContainer: mp4\r\n%s\r\n",
         host, (long long)info.st_size, config->device_id, capture_id,
-        config->width, config->height, config->fps, config->duration_ms);
+        config->width, config->height, config->fps, actual_duration, grant_header);
     int ok = n > 0 && (size_t)n < sizeof(header) && send_all(fd, header, (size_t)n) == 0;
     char chunk[8192];
     off_t remaining = info.st_size;
@@ -387,6 +396,31 @@ int http_file_stored(const Config *config, const char *capture_id, int *stored,
         *size_bytes = (long long)size->valuedouble;
         strcpy(sha256, hash->valuestring);
     }
+    cJSON_Delete(response);
+    return ok ? 0 : -1;
+}
+
+int http_v3_start(const Config *config, const char *id, const char *gate, const char *boot) {
+    cJSON *data = cJSON_CreateObject();
+    if (!data) return -1;
+    cJSON_AddNumberToObject(data, "version", 3);
+    cJSON_AddStringToObject(data, "device_id", config->device_id);
+    cJSON_AddStringToObject(data, "capture_id", id);
+    cJSON_AddStringToObject(data, "gate_id", gate);
+    cJSON_AddStringToObject(data, "boot_id", boot);
+    cJSON *response = post_json(config, "/api/v1/capture/start", data);
+    cJSON_Delete(data);
+    int ok = response && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "ok"));
+    cJSON_Delete(response);
+    return ok ? 0 : -1;
+}
+int http_v3_status(const Config *config, const cJSON *event) {
+    cJSON *response = post_json(config, "/api/v1/capture/status", event);
+    const cJSON *expected = cJSON_GetObjectItemCaseSensitive(event, "event_id");
+    const cJSON *received = cJSON_GetObjectItemCaseSensitive(response, "event_id");
+    int ok = response && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "ok"));
+    if (cJSON_IsString(expected))
+        ok = ok && cJSON_IsString(received) && !strcmp(expected->valuestring, received->valuestring);
     cJSON_Delete(response);
     return ok ? 0 : -1;
 }

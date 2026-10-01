@@ -61,14 +61,14 @@ correct_receipt = {
 
 source_files = [
     str(path) for path in (ROOT / "src").rglob("*.c")
-    if path.name != "app_controller.c"
+    if path.name not in {"app_controller.c", "legacy.c", "luckfox_mux_adapter.c"}
 ]
 binary = ROOT / "tests" / ".pending_harness"
 sample = ROOT / "tests" / ".pending_sample.mp4"
 subprocess.run(
     ["gcc", "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-D_DEFAULT_SOURCE",
-     "-Wall", "-Wextra", "-Werror", "-O2", "-Iinclude", "-Ithird_party/cjson",
-     "tests/pending_harness.c", *source_files, "third_party/cjson/cJSON.c",
+     "-Wall", "-Wextra", "-Werror", "-O2", "-Iinclude", "-Ithird_party/cjson", "-Ithird_party/lwbtn/include",
+     "tests/pending_harness.c", *source_files, "third_party/cjson/cJSON.c", "third_party/lwbtn/lwbtn.c",
      "-o", str(binary)], cwd=ROOT, check=True,
 )
 server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
