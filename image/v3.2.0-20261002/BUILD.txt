@@ -1,0 +1,3 @@
+version=3.2.0
+release_tag=instrument-v3.2.0-20261002
+source_base_commit=d2a18f9c9727704fb5a873354acf343681ce9fa5
