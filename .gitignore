@@ -14,4 +14,5 @@
 /baseline/
 
 /tests/.discard_check
-\n/validation/*/*.instrument_app\n
+
+/validation/*/*.instrument_app
