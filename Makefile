@@ -39,6 +39,7 @@ check-host:
 	./instrument_app_host --check-config config.example.json
 	python3 tests/test_upload.py
 	python3 tests/test_pending_upload.py
+	python3 tests/test_capture_discard.py
 	gcc $(CFLAGS) tests/test_buttons.c src/middleware/buttons.c src/platform/luckfox_gpio.c third_party/lwbtn/lwbtn.c -o tests/.buttons_check
 	./tests/.buttons_check
 

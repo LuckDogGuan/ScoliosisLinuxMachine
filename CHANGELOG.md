@@ -1,3 +1,22 @@
+# 3.3.0 - Capture deletion while permission remains enabled (2026-10-02)
+
+- Proof-bound durable discard intent, stop only the matched upload with SIGKILL and reap it before cleanup; gate and unrelated recording remain active.
+- Pending lists, upload grants, completion events and maintenance hash writes reject tombstoned capture IDs; startup resumes unfinished per-file discards.
+- Host regression covers live uploader ignoring SIGTERM, enabled gate, repeated receipt, mismatched proof, no reappearance in pending list and crash recovery.
+- Flutter counterpart adds capture-page deletion, school browsing/class gate, fixed-ruler test inference and workspace progress. Firmware sources/builds/archives/Git remain in WSL2.
+- Base before this task: 3a3ac12 plus previously uncommitted 3.2.2 records changes, preserved in this commit. Board rollback binary: validation/capture-results-20261002/board-before.instrument_app; board copy /opt/instrument/backups/capture-results-20261002/instrument_app.
+
+## 3.2.2 - 2026-10-02 UTC+8
+
+- Isolate discard work from maintenance to prevent old event delivery starving proof-bound cleanup.
+
+## 3.2.1 - 2026-10-02 UTC+8
+
+- Add paired-host capture_discard with capture ID, transaction, exact size and SHA256.
+- Hash and cleanup run in a worker; current recording/upload is rejected. Durable per-capture intent supports retries, and success is returned only after cleanup completes.
+- Keep pairing, config, pending media, events and student associations through deployment/rollback.
+- Validation: ARM build, host regressions and proof-bound discard tests; see Windows records-flow-20261002 evidence for live acceptance.
+
 ## 3.2.0 (2026-10-02)
 
 - Delay failure recovery during initial Wi-Fi setup for 60 seconds; log state and recovery action correlation. Real disconnect recovery is retained.

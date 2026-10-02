@@ -79,7 +79,7 @@ typedef struct {
     uint64_t startup_at, diagnostics_lease, diagnostics_next;
     char diagnostics_id[ID_SIZE];
     Worker diagnostics;
-    Worker record, upload, maintenance, notifier, audio;
+    Worker record, upload, maintenance, notifier, audio, discard;
     char maintenance_type;
     char upload_id[ID_SIZE];
     char sounds[8][32]; unsigned sound_in, sound_out;
@@ -143,7 +143,7 @@ static int make_worker(Worker *worker, int *child_fd) {
 }
 static void child_isolate(Runtime *rt, int own_fd) {
     close(rt->udp);
-    Worker *workers[] = {&rt->record, &rt->upload, &rt->maintenance, &rt->notifier, &rt->audio};
+    Worker *workers[] = {&rt->record, &rt->upload, &rt->maintenance, &rt->notifier, &rt->audio, &rt->discard, &rt->diagnostics};
     for (size_t i = 0; i < sizeof(workers)/sizeof(workers[0]); i++)
         if (workers[i]->pid > 0 && workers[i]->fd >= 0 && workers[i]->fd != own_fd) close(workers[i]->fd);
 }
@@ -184,6 +184,11 @@ static int digest(const char *path, char hash[65], long long *size) {
     memcpy(hash, data, 64); hash[64] = 0; *size = (long long)info.st_size;
     return 0;
 }
+static int discard_intended(const char *id) {
+    if (!safe_id(id)) return 1;
+    char path[384]; snprintf(path,sizeof(path),"%s/discard-%s.json",STATE_DIR,id);
+    return !access(path,F_OK);
+}
 static int pending_items(int offset, int limit, Item items[MAX_ITEMS], int *next) {
     DIR *directory = opendir(PENDING_DIR);
     if (!directory) return -1;
@@ -195,7 +200,7 @@ static int pending_items(int offset, int limit, Item items[MAX_ITEMS], int *next
         if (count == limit) { *next = offset + count; break; }
         Item *item = &items[count]; memset(item, 0, sizeof(*item));
         memcpy(item->id, entry->d_name, len - 4);
-        if (!safe_id(item->id)) continue;
+        if (!safe_id(item->id) || discard_intended(item->id)) continue;
         char path[384]; snprintf(path, sizeof(path), "%s/%s", PENDING_DIR, entry->d_name);
         struct stat info; if (stat(path, &info) || !S_ISREG(info.st_mode)) continue;
         item->size = (long long)info.st_size;
@@ -220,7 +225,7 @@ static cJSON *next_event(Runtime *rt, char event_id[ID_SIZE]) {
         if (len <= 5 || strcmp(entry->d_name + len - 5, ".json")) continue;
         char path[384]; snprintf(path, sizeof(path), "%s/%s", EVENTS_DIR, entry->d_name);
         cJSON *value = v3_read_json(path);
-        int eligible = value && !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(value, "acknowledged")) &&
+        int eligible = value && !discard_intended(str(value,"capture_id")) && !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(value, "acknowledged")) &&
             (!str(value, "host_id")[0] || !strcmp(str(value, "host_id"), rt->host));
         cJSON_Delete(value);
         if (!eligible) continue;
@@ -426,6 +431,7 @@ static void maintenance(Runtime *rt, uint64_t now) {
                     if (!strcmp(rt->wifi_state, "available")) queue_sound(rt, first_wifi ? "wifi_connected" : "wifi_restored");
                 }
                 for (int i = 0; i < result.count; i++) {
+                    if (discard_intended(result.items[i].id)) continue;
                     char path[384]; snprintf(path, sizeof(path), "%s/%s.json", PENDING_DIR, result.items[i].id);
                     cJSON *value = v3_read_json(path);
                     if (!value) value = cJSON_CreateObject();
@@ -513,7 +519,7 @@ static void maintenance(Runtime *rt, uint64_t now) {
 static void begin_upload(Runtime *rt, const cJSON *request, cJSON *reply) {
     const char *id = str(request, "capture_id"), *grant = str(request, "grant_id");
     int ttl = (int)num(request, "ttl_ms");
-    if (rt->upload.pid || !safe_id(id) || !safe_id(grant) || ttl <= 0 || ttl > 30000 || strlen(str(request, "sha256")) != 64) return;
+    if (rt->upload.pid || discard_intended(id) || !safe_id(id) || !safe_id(grant) || ttl <= 0 || ttl > 30000 || strlen(str(request, "sha256")) != 64) return;
     char path[384], metadata_path[384];
     snprintf(path, sizeof(path), "%s/%s.mp4", PENDING_DIR, id);
     snprintf(metadata_path, sizeof(metadata_path), "%s/%s.json", PENDING_DIR, id);
@@ -633,7 +639,7 @@ static cJSON *base_reply(Runtime *rt, const cJSON *request) {
 static void hello_reply(Runtime *rt, cJSON *reply, uint64_t now) {
     cJSON_ReplaceItemInObjectCaseSensitive(reply, "ok", cJSON_CreateTrue());
     cJSON *capabilities = cJSON_AddArrayToObject(reply, "capabilities");
-    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics"};
+    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard"};
     for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); i++) cJSON_AddItemToArray(capabilities, cJSON_CreateString(names[i]));
     cJSON_AddStringToObject(reply, "paired_host_id", rt->revoking ? "" : rt->host);
     cJSON_AddNumberToObject(reply, "volume", rt->audio_volume);
@@ -665,6 +671,79 @@ static void hello_reply(Runtime *rt, cJSON *reply, uint64_t now) {
     if (rt->memory_mb > 0) cJSON_AddNumberToObject(metrics, "memory_total_mb", rt->memory_mb);
     cJSON_AddNumberToObject(metrics, "pending_count", storage_pending_count());
     cJSON_AddStringToObject(metrics, "battery", battery_present() ? "present" : "absent");
+}
+/* One proof-bound file at a time; durable intent survives partial cleanup. */
+static int persist_discard(const char *id, const char *txn, long long expected_size, const char *expected_hash) {
+    char receipt_path[384], media[384], hash[65];
+    snprintf(receipt_path,sizeof(receipt_path),"%s/discard-%s.json",STATE_DIR,id);
+    snprintf(media,sizeof(media),"%s/%s.mp4",PENDING_DIR,id);
+    cJSON *receipt=v3_read_json(receipt_path);
+    if (receipt) {
+        int match=!strcmp(str(receipt,"txn_id"),txn) && !strcmp(str(receipt,"sha256"),expected_hash) && num(receipt,"size_bytes")== (double)expected_size;
+        cJSON_Delete(receipt); return match ? 0 : -1;
+    }
+    struct stat info; long long actual_size;
+    if (!lstat(media,&info)) {
+        if (!S_ISREG(info.st_mode) || digest(media,hash,&actual_size) || actual_size!=expected_size || strcmp(hash,expected_hash)) return -1;
+    } else if (errno!=ENOENT) return -1;
+    receipt=cJSON_CreateObject();
+    cJSON_AddStringToObject(receipt,"capture_id",id); cJSON_AddStringToObject(receipt,"txn_id",txn);
+    cJSON_AddStringToObject(receipt,"sha256",expected_hash); cJSON_AddNumberToObject(receipt,"size_bytes",(double)expected_size);
+    cJSON_AddBoolToObject(receipt,"done",0);
+    int result=v3_save_json(receipt_path,receipt); cJSON_Delete(receipt); return result;
+}
+static int discard_file(const char *id, const char *txn, long long size, const char *hash) {
+    if (persist_discard(id,txn,size,hash)) return -1;
+    char path[384];
+    const char *dirs[]={PENDING_DIR,PENDING_DIR,EVENTS_DIR};
+    const char *exts[]={"mp4","json","json"};
+    for (int i=0;i<3;i++) {
+        snprintf(path,sizeof(path),"%s/%s.%s",dirs[i],id,exts[i]);
+        if (unlink(path) && errno!=ENOENT) return -1;
+    }
+    snprintf(path,sizeof(path),"%s/discard-%s.json",STATE_DIR,id);
+    cJSON *receipt=v3_read_json(path);
+    if (!receipt) return -1;
+    cJSON_ReplaceItemInObjectCaseSensitive(receipt,"done",cJSON_CreateTrue());
+    int result=v3_save_json(path,receipt); cJSON_Delete(receipt); return result;
+}
+static void resume_discards(void) {
+    DIR *dir=opendir(STATE_DIR); if (!dir) return;
+    struct dirent *entry;
+    while ((entry=readdir(dir))) {
+        if (strncmp(entry->d_name,"discard-",8)) continue;
+        char path[384]; snprintf(path,sizeof(path),"%s/%s",STATE_DIR,entry->d_name);
+        cJSON *receipt=v3_read_json(path);
+        if (receipt && safe_id(str(receipt,"capture_id")) && !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(receipt,"done"))) {
+            (void)discard_file(str(receipt,"capture_id"),str(receipt,"txn_id"),(long long)num(receipt,"size_bytes"),str(receipt,"sha256"));
+        }
+        cJSON_Delete(receipt);
+    }
+    closedir(dir);
+}
+static int begin_discard(Runtime *rt, const cJSON *request, cJSON *reply) {
+    const char *id=str(request,"capture_id"), *txn=str(request,"txn_id"), *hash=str(request,"sha256");
+    double size=num(request,"size_bytes");
+    if (!safe_id(id) || !safe_id(txn) || strlen(hash)!=64 || size<0 || size>9007199254740991.0 || size!=(double)(long long)size) return 0;
+    for (int i=0;i<64;i++) if (!((hash[i]>='a' && hash[i]<='f') || (hash[i]>='0' && hash[i]<='9'))) return 0;
+    if ((rt->record.pid && !strcmp(rt->current_id,id)) || (rt->completion_pending && !strcmp(rt->current_id,id))) { cJSON_AddStringToObject(reply,"error","capture_busy"); return 0; }
+    char path[384]; snprintf(path,sizeof(path),"%s/discard-%s.json",STATE_DIR,id);
+    cJSON *receipt=v3_read_json(path);
+    int matched=receipt && !strcmp(str(receipt,"txn_id"),txn) && !strcmp(str(receipt,"sha256"),hash) && num(receipt,"size_bytes")==size;
+    int done=matched && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(receipt,"done"));
+    cJSON_Delete(receipt);
+    if (done) return 1;
+    if (rt->discard.pid) { cJSON_AddStringToObject(reply,"error","busy"); return 0; }
+    int fd; int branch=make_worker(&rt->discard,&fd);
+    if (branch<0) return 0;
+    if (!branch) {
+        child_isolate(rt,fd);
+        WorkerResult result={.type='D',.result=persist_discard(id,txn,(long long)size,hash)};
+        COPY(result.event,id);
+        (void)send(fd,&result,sizeof(result),MSG_NOSIGNAL); close(fd); _exit(0);
+    }
+    cJSON_AddStringToObject(reply,"error","discard_pending");
+    return 0;
 }
 static void receive_udp(Runtime *rt, uint64_t now) {
     for (int packets = 0; packets < 16; packets++) {
@@ -751,6 +830,8 @@ static void receive_udp(Runtime *rt, uint64_t now) {
             cJSON_AddStringToObject(reply, "event_id", str(request, "event_id"));
         } else if (!rt->paired || strcmp(rt->host, str(request, "host_id")) || strcmp(rt->peer_ip, address)) {
             cJSON_AddStringToObject(reply, "error", "host_not_paired");
+        } else if (!strcmp(op, "capture_discard")) {
+            success = begin_discard(rt, request, reply);
         } else if (!strcmp(op, "time_sync")) {
             double utc = num(request, "utc_ms");
             if (!rt->record.pid && !rt->completion_pending && utc >= 1577836800000.0 && utc < 4102444800000.0) {
@@ -800,7 +881,7 @@ static void receive_udp(Runtime *rt, uint64_t now) {
         } else if (!strcmp(op, "capture_prepare")) {
             const char *id = str(request, "capture_id");
             char path[384]; snprintf(path, sizeof(path), "%s/%s.json", EVENTS_DIR, safe_id(id) ? id : "invalid");
-            if (rt->gate && now < rt->lease && !rt->record.pid && !rt->completion_pending && safe_id(id) &&
+            if (rt->gate && now < rt->lease && !rt->record.pid && !rt->completion_pending && safe_id(id) && !discard_intended(id) &&
                 !strcmp(rt->gate_id, str(request, "gate_id")) && access(path, F_OK) &&
                 (!rt->capture_id[0] || !strcmp(rt->capture_id, id))) {
                 COPY(rt->capture_id, id); COPY(rt->phase, "prepared"); success = 1;
@@ -842,6 +923,23 @@ static void receive_udp(Runtime *rt, uint64_t now) {
         cJSON_Delete(reply); cJSON_Delete(request);
     }
 }
+static void discard_messages(Runtime *rt) {
+    if (!rt->discard.pid) return;
+    WorkerResult result; ssize_t size=recv(rt->discard.fd,&result,sizeof(result),MSG_DONTWAIT);
+    if (size==(ssize_t)sizeof(result) || size==0) finish_worker(&rt->discard);
+    if (size==(ssize_t)sizeof(result) && !result.result && safe_id(result.event)) {
+        if (rt->upload.pid && !strcmp(rt->upload_id,result.event)) {
+            /* The worker inherits a SIGTERM handler; SIGKILL reliably stops binary IO. */
+            (void)kill(rt->upload.pid,SIGKILL);
+            while (waitpid(rt->upload.pid,NULL,0)<0 && errno==EINTR) {}
+            finish_worker(&rt->upload); rt->upload_id[0]=0;
+        }
+        char path[384]; snprintf(path,sizeof(path),"%s/discard-%s.json",STATE_DIR,result.event);
+        cJSON *receipt=v3_read_json(path);
+        if (receipt) (void)discard_file(result.event,str(receipt,"txn_id"),(long long)num(receipt,"size_bytes"),str(receipt,"sha256"));
+        cJSON_Delete(receipt);
+    }
+}
 static void diagnostics_tick(Runtime *rt, uint64_t now) {
     if (rt->diagnostics.pid) {
         WorkerResult result; ssize_t size=recv(rt->diagnostics.fd,&result,sizeof(result),MSG_DONTWAIT);
@@ -866,6 +964,7 @@ int runtime_run(Config *config) {
     rt.startup_at = v3_now();
     COPY(rt.phase, "idle"); COPY(rt.wifi_state, "unknown");
     if (mkdir(EVENTS_DIR, 0700) && errno != EEXIST) return 1;
+    resume_discards();
     if (storage_capture_id(config, rt.boot, sizeof(rt.boot))) return 1;
     cJSON *pair = v3_read_json(STATE_DIR "/pair-v3.json");
     if (pair && safe_id(str(pair, "host_id"))) { COPY(rt.host, str(pair, "host_id")); rt.paired = 1; }
@@ -945,7 +1044,7 @@ int runtime_run(Config *config) {
         if (rt.completion_pending && !rt.record.pid && now >= rt.completion_retry) {
             WorkerResult retry = rt.completion; completed(&rt, &retry);
         }
-        notifier_messages(&rt); upload_messages(&rt); audio_messages(&rt); receive_udp(&rt, now); maintenance(&rt, now);
+        discard_messages(&rt); notifier_messages(&rt); upload_messages(&rt); audio_messages(&rt); receive_udp(&rt, now); maintenance(&rt, now);
         /* Every child is bounded; reap send-then-exit races without blocking input. */
         while (waitpid(-1, NULL, WNOHANG) > 0) {}
         struct pollfd input = {.fd = rt.udp, .events = POLLIN};
@@ -960,6 +1059,7 @@ int runtime_run(Config *config) {
     if (rt.notifier.pid) (void)waitpid(rt.notifier.pid, NULL, 0);
     if (rt.upload.pid) (void)waitpid(rt.upload.pid, NULL, 0);
     if (rt.maintenance.pid) (void)waitpid(rt.maintenance.pid, NULL, 0);
+    if (rt.discard.pid) (void)waitpid(rt.discard.pid, NULL, 0);
     if (rt.audio.pid) { (void)waitpid(rt.audio.pid, NULL, 0); (void)audio_set_volume(config->volume); }
     close(rt.udp); return 0;
 }
