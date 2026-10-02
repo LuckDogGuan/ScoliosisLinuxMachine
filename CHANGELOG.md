@@ -1,3 +1,11 @@
+## 3.2.0 (2026-10-02)
+
+- Delay failure recovery during initial Wi-Fi setup for 60 seconds; log state and recovery action correlation. Real disconnect recovery is retained.
+- Add paired-host UTC synchronization and RTC write, rejecting recording/finalization.
+- Add renewable diagnostics lease, raw button state and bounded JPEG preview worker. Diagnostics suppress pairing and capture keys; normal operation requires all keys released.
+- Enable RKiPC JPEG channel in persistent startup, leave periodic snapshots disabled.
+- Firmware source/build/package/Git writes remain in WSL2; retain config, pairing state, pending videos and event receipts during rollout/rollback.
+
 # 下位机修改与进度
 
 ## 3.1.0 / 2026-10-01

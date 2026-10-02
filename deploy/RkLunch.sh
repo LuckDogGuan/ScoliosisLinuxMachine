@@ -126,6 +126,9 @@ post_chk() {
 		cp -fa /oem/usr/share/image.bmp /userdata/
 	fi
 
+	# Diagnostics request one JPEG at a time, never periodic snapshots.
+	sed -i 's/^enable_jpeg[[:space:]]*=.*/enable_jpeg = 1/; s/^enable_cycle_snapshot[[:space:]]*=.*/enable_cycle_snapshot = 0/' "$rkipc_ini"
+	mkdir -p /video0 /video1 /video2
 	# Hardcoded factory volume 30 commented out: volume is now managed dynamically and persisted by instrument_app
 	# amixer cset name='DAC LINEOUT Volume' 30 >/dev/null 2>&1
 

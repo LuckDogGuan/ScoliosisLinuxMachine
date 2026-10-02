@@ -6,6 +6,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/time.h>
+#include <sys/ioctl.h>
+#include <linux/rtc.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,7 +75,10 @@ typedef struct {
     char completion_event[ID_SIZE];
     char last_nonce[ID_SIZE], last_op[64], last_reply[PACKET_SIZE];
     long free_mb, total_mb, available_mb, memory_mb;
-    int rssi, gateway_failures;
+    int rssi, gateway_failures, wifi_seen;
+    uint64_t startup_at, diagnostics_lease, diagnostics_next;
+    char diagnostics_id[ID_SIZE];
+    Worker diagnostics;
     Worker record, upload, maintenance, notifier, audio;
     char maintenance_type;
     char upload_id[ID_SIZE];
@@ -409,8 +415,11 @@ static void maintenance(Runtime *rt, uint64_t now) {
                 rt->metrics_at = result.started_at;
                 rt->gateway_failures = result.gateway > 0 ? 0 : rt->gateway_failures + 1;
                 int transition = strcmp(rt->wifi_state, result.wifi_state);
-                int first_wifi = !strcmp(rt->wifi_state, "unknown");
+                int first_wifi = !rt->wifi_seen;
+                if (result.gateway > 0) rt->wifi_seen = 1;
                 COPY(rt->wifi_state, result.wifi_state);
+                char detail[160]; snprintf(detail,sizeof(detail),"gateway=%d wifi=%d failures=%d state=%s initial=%d",result.gateway,result.wifi,rt->gateway_failures,rt->wifi_state,first_wifi);
+                instrument_trace("network_snapshot","","",rt->boot,detail);
                 if (transition) {
                     if (!strcmp(rt->wifi_state, "recovering")) queue_sound(rt, "wifi_recovering");
                     if (!strcmp(rt->wifi_state, "needs_attention")) queue_sound(rt, "wifi_attention");
@@ -477,8 +486,10 @@ static void maintenance(Runtime *rt, uint64_t now) {
             (void)storage_memory_mb(&result.available_mb, &result.memory_mb);
             result.started_at = v3_now();
             int failures = result.gateway > 0 ? 0 : rt->gateway_failures + 1;
-            COPY(result.wifi_state, result.gateway > 0 ? "available" : failures >= 6 ? "needs_attention" : "recovering");
-            if (failures && !getenv("INSTRUMENT_HOST_TEST")) {
+            int initializing = !rt->wifi_seen && v3_now() - rt->startup_at < 60000;
+            COPY(result.wifi_state, result.gateway > 0 ? "available" : initializing ? "unknown" : failures >= 6 ? "needs_attention" : "recovering");
+            if (failures && !initializing && !getenv("INSTRUMENT_HOST_TEST")) {
+                instrument_trace("wifi_reconnect","","",rt->boot,failures < 3 ? "reassociate" : "restart_wifi");
                 if (failures < 3) {
                     char *const args[] = {"wpa_cli", "-i", "wlan0", "reassociate", NULL};
                     (void)run_command(args);
@@ -622,7 +633,7 @@ static cJSON *base_reply(Runtime *rt, const cJSON *request) {
 static void hello_reply(Runtime *rt, cJSON *reply, uint64_t now) {
     cJSON_ReplaceItemInObjectCaseSensitive(reply, "ok", cJSON_CreateTrue());
     cJSON *capabilities = cJSON_AddArrayToObject(reply, "capabilities");
-    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover"};
+    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics"};
     for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); i++) cJSON_AddItemToArray(capabilities, cJSON_CreateString(names[i]));
     cJSON_AddStringToObject(reply, "paired_host_id", rt->revoking ? "" : rt->host);
     cJSON_AddNumberToObject(reply, "volume", rt->audio_volume);
@@ -637,6 +648,8 @@ static void hello_reply(Runtime *rt, cJSON *reply, uint64_t now) {
     cJSON_AddStringToObject(reply, "unpair_event_id", rt->unpair);
     cJSON_AddNumberToObject(reply, "pair_window_remaining_ms", rt->pair_window > now ? (double)(rt->pair_window - now) : 0);
     cJSON_AddStringToObject(reply, "phase", rt->phase);
+    cJSON_AddNumberToObject(reply, "utc_ms", (double)wall_ms());
+    cJSON_AddBoolToObject(reply, "diagnostics_active", rt->diagnostics_lease > now);
     cJSON_AddStringToObject(reply, "wifi_state", rt->wifi_state);
     cJSON_AddBoolToObject(reply, "gate_enabled", rt->gate && now < rt->lease);
     cJSON_AddStringToObject(reply, "gate_id", rt->gate_id);
@@ -738,6 +751,35 @@ static void receive_udp(Runtime *rt, uint64_t now) {
             cJSON_AddStringToObject(reply, "event_id", str(request, "event_id"));
         } else if (!rt->paired || strcmp(rt->host, str(request, "host_id")) || strcmp(rt->peer_ip, address)) {
             cJSON_AddStringToObject(reply, "error", "host_not_paired");
+        } else if (!strcmp(op, "time_sync")) {
+            double utc = num(request, "utc_ms");
+            if (!rt->record.pid && !rt->completion_pending && utc >= 1577836800000.0 && utc < 4102444800000.0) {
+                struct timeval tv = {.tv_sec = (time_t)(utc / 1000), .tv_usec = (suseconds_t)((uint64_t)utc % 1000) * 1000};
+                struct tm tm; struct rtc_time rtc;
+                if (gmtime_r(&tv.tv_sec, &tm)) {
+                    memset(&rtc,0,sizeof(rtc)); rtc.tm_sec=tm.tm_sec; rtc.tm_min=tm.tm_min; rtc.tm_hour=tm.tm_hour;
+                    rtc.tm_mday=tm.tm_mday; rtc.tm_mon=tm.tm_mon; rtc.tm_year=tm.tm_year;
+                    int fd = open("/dev/rtc0", O_RDWR|O_CLOEXEC);
+                    if (!settimeofday(&tv,NULL) && fd >= 0 && !ioctl(fd,RTC_SET_TIME,&rtc)) success=1;
+                    if(fd >= 0) close(fd);
+                }
+            } else cJSON_AddStringToObject(reply,"error","busy_or_invalid_time");
+            cJSON_AddNumberToObject(reply,"utc_ms",(double)wall_ms());
+        } else if (!strcmp(op, "diagnostics_start")) {
+            const char *id = str(request,"diagnostics_id"); int ttl=(int)num(request,"ttl_ms");
+            if (!rt->gate && !rt->record.pid && !rt->completion_pending && !rt->upload.pid && !rt->diagnostics.pid && safe_id(id) && ttl>0 && ttl<=6000) {
+                COPY(rt->diagnostics_id,id); rt->diagnostics_lease=now+(unsigned)ttl; rt->diagnostics_next=now;
+                rt->hold_started=rt->middle_hold=0; rt->release_required=1; success=1;
+            }
+        } else if (!strcmp(op,"diagnostics_renew") || !strcmp(op,"diagnostics_status") || !strcmp(op,"diagnostics_end")) {
+            int ttl=(int)num(request,"ttl_ms");
+            if (!strcmp(rt->diagnostics_id,str(request,"diagnostics_id")) && now < rt->diagnostics_lease) {
+                if (!strcmp(op,"diagnostics_end")) {rt->diagnostics_lease=0; rt->release_required=1; success=1;}
+                else if (!strcmp(op,"diagnostics_status")) success=1;
+                else if (ttl>0 && ttl<=6000) {rt->diagnostics_lease=now+(unsigned)ttl; success=1;}
+            }
+            cJSON_AddNumberToObject(reply,"key_mask",rt->keys);
+            cJSON_AddNumberToObject(reply,"remaining_ms",rt->diagnostics_lease>now ? (double)(rt->diagnostics_lease-now) : 0);
         } else if (!strcmp(op, "unpair")) {
             success = !request_unpair(rt);
             cJSON_AddStringToObject(reply, "event_id", rt->unpair);
@@ -746,7 +788,7 @@ static void receive_udp(Runtime *rt, uint64_t now) {
             cJSON_AddStringToObject(reply, "phase", rt->phase);
         } else if (!strcmp(op, "capture_enable")) {
             const char *gate = str(request, "gate_id"); int ttl = (int)num(request, "ttl_ms");
-            if (!rt->audio.pid && !rt->record.pid && !rt->completion_pending && safe_id(gate) && ttl > 0 && ttl <= 6000 && strcmp(gate, rt->gate_id)) {
+            if (now >= rt->diagnostics_lease && !rt->diagnostics.pid && !rt->audio.pid && !rt->record.pid && !rt->completion_pending && safe_id(gate) && ttl > 0 && ttl <= 6000 && strcmp(gate, rt->gate_id)) {
                 COPY(rt->gate_id, gate); rt->gate = 1; rt->lease = now + (unsigned)ttl;
                 rt->capture_id[0] = 0; queue_sound(rt, "capture_enabled"); success = 1;
             }
@@ -800,9 +842,28 @@ static void receive_udp(Runtime *rt, uint64_t now) {
         cJSON_Delete(reply); cJSON_Delete(request);
     }
 }
+static void diagnostics_tick(Runtime *rt, uint64_t now) {
+    if (rt->diagnostics.pid) {
+        WorkerResult result; ssize_t size=recv(rt->diagnostics.fd,&result,sizeof(result),MSG_DONTWAIT);
+        if (size==(ssize_t)sizeof(result) || size==0) {
+            finish_worker(&rt->diagnostics);
+            instrument_trace("diagnostics_frame","","",rt->boot,size==(ssize_t)sizeof(result) && !result.result ? "success" : "failed");
+        }
+        return;
+    }
+    if (now >= rt->diagnostics_lease || now < rt->diagnostics_next) return;
+    rt->diagnostics_next=now+1000;
+    int fd; int branch=make_worker(&rt->diagnostics,&fd);
+    if (!branch) {
+        child_isolate(rt,fd);
+        WorkerResult result={.result=camera_diagnostic_frame(rt->config,rt->diagnostics_id)};
+        (void)send(fd,&result,sizeof(result),MSG_NOSIGNAL); close(fd); _exit(0);
+    }
+}
 int runtime_run(Config *config) {
     Runtime rt = {.config = config, .audio_volume = config->volume, .keys = -1, .release_required = 1, .rssi = -100,
                   .free_mb = -1, .total_mb = -1, .available_mb = -1, .memory_mb = -1};
+    rt.startup_at = v3_now();
     COPY(rt.phase, "idle"); COPY(rt.wifi_state, "unknown");
     if (mkdir(EVENTS_DIR, 0700) && errno != EEXIST) return 1;
     if (storage_capture_id(config, rt.boot, sizeof(rt.boot))) return 1;
@@ -847,7 +908,14 @@ int runtime_run(Config *config) {
             instrument_trace("buttons",rt.current_id,rt.gate_id,rt.boot,detail);
         }
         if (rt.gate && now >= rt.lease) disable_gate(&rt);
-        if (rt.keys < 0) { rt.middle_hold = 0; rt.middle_fired = 1; rt.hold_started = 0; }
+        if (rt.diagnostics_lease && now >= rt.diagnostics_lease) {
+            rt.diagnostics_lease=0; rt.release_required=1; rt.middle_fired=1;
+            rt.hold_started=rt.middle_hold=0;
+            instrument_trace("diagnostics_expired","","",rt.boot,"");
+        }
+        if (now < rt.diagnostics_lease) {
+            rt.hold_started=rt.middle_hold=0; rt.middle_fired=1; rt.release_required=1;
+        } else if (rt.keys < 0) { rt.middle_hold = 0; rt.middle_fired = 1; rt.hold_started = 0; }
         else if (rt.keys & 2) {
             rt.hold_started = 0;
             if (!rt.middle_hold) rt.middle_hold = now;
@@ -872,6 +940,7 @@ int runtime_run(Config *config) {
                     (rt.maintenance.pid && rt.maintenance_type == 'A'), now - rt.hold_started)) start_record(&rt);
             }
         }
+        diagnostics_tick(&rt,now);
         record_messages(&rt);
         if (rt.completion_pending && !rt.record.pid && now >= rt.completion_retry) {
             WorkerResult retry = rt.completion; completed(&rt, &retry);
@@ -887,6 +956,7 @@ int runtime_run(Config *config) {
         char stop = 'T'; (void)send(rt.record.fd, &stop, 1, MSG_NOSIGNAL);
         while (rt.record.pid) { record_messages(&rt); struct pollfd input = {.fd = rt.record.fd, .events = POLLIN}; (void)poll(&input, 1, 10); }
     }
+    if (rt.diagnostics.pid) (void)waitpid(rt.diagnostics.pid, NULL, 0);
     if (rt.notifier.pid) (void)waitpid(rt.notifier.pid, NULL, 0);
     if (rt.upload.pid) (void)waitpid(rt.upload.pid, NULL, 0);
     if (rt.maintenance.pid) (void)waitpid(rt.maintenance.pid, NULL, 0);

@@ -137,3 +137,43 @@ int camera_capture_settings(int fps, int bitrate, int gop, CameraSettings *setti
     snprintf(settings->rate,sizeof(settings->rate),"60/%d",60/fps);
     settings->bitrate=bitrate; settings->gop=gop; return 0;
 }
+
+/* Read only the new JPEG requested by this diagnostic operation. */
+int camera_diagnostic_frame(const Config *config, const char *token) {
+    char existing[MAX_EXISTING][128]; int count=0;
+    DIR *dir=opendir(VIDEO_DIR); struct dirent *entry;
+    if (!dir) { instrument_trace("diagnostics_camera", "", "", "", "video_dir_unavailable"); return -1; }
+    while ((entry=readdir(dir))) {
+        if (!strstr(entry->d_name,".jpeg")) continue;
+        if(count>=MAX_EXISTING) {closedir(dir); return -1;}
+        snprintf(existing[count++],128,"%.127s",entry->d_name);
+    }
+    closedir(dir);
+    if (rpc_simple("rk_take_photo")) { instrument_trace("diagnostics_camera", "", "", "", "snapshot_rpc_failed"); return -1; }
+    uint64_t deadline=v3_now()+2000;
+    char path[384]={0}; long previous=-1;
+    while(v3_now()<deadline) {
+        dir=opendir(VIDEO_DIR); if(!dir) return -1;
+        while((entry=readdir(dir))) {
+            size_t length=strlen(entry->d_name);
+            if(length<5 || strcmp(entry->d_name+length-5,".jpeg")) continue;
+            int old=0; for(int i=0;i<count;i++) if(!strcmp(existing[i],entry->d_name)) {old=1; break;}
+            if(!old) {snprintf(path,sizeof(path),"%s/%.127s",VIDEO_DIR,entry->d_name); break;}
+        }
+        closedir(dir);
+        if(path[0]) {
+            struct stat st; unsigned char end[2]; int fd=open(path,O_RDONLY|O_CLOEXEC);
+            int complete=fd>=0 && !fstat(fd,&st) && st.st_size>=4 && st.st_size<=1048576 &&
+                st.st_size==previous && lseek(fd,-2,SEEK_END)>=0 && read(fd,end,2)==2 && end[0]==255 && end[1]==217;
+            if(fd>=0) close(fd);
+            if(complete) {
+                int result=http_diagnostic_frame(config,token,path); instrument_trace("diagnostics_camera", "", "", "", result ? "http_failed" : "http_sent"); (void)unlink(path); return result;
+            }
+            if(!stat(path,&st)) previous=st.st_size;
+        }
+        struct timespec pause={.tv_nsec=50000000}; nanosleep(&pause,NULL);
+    }
+    instrument_trace("diagnostics_camera", "", "", "", path[0] ? "jpeg_incomplete" : "jpeg_timeout");
+    if(path[0]) (void)unlink(path);
+    return -1;
+}

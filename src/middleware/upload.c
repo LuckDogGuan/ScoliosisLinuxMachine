@@ -424,3 +424,35 @@ int http_v3_status(const Config *config, const cJSON *event) {
     cJSON_Delete(response);
     return ok ? 0 : -1;
 }
+
+/* Diagnostic binary frames use the same bounded socket transport as videos. */
+int http_diagnostic_frame(const Config *config, const char *token, const char *path) {
+    FILE *file=fopen(path,"rb"); if(!file) return -1;
+    struct stat st;
+    if(fstat(fileno(file),&st) || st.st_size<4 || st.st_size>1048576) {fclose(file); return -1;}
+    char host[64]; int fd=connect_pc(config,host,sizeof(host));
+    if(fd<0) {fclose(file); return -1;}
+    struct timeval timeout={.tv_sec=3};
+    (void)setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
+    (void)setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
+    char header[768];
+    int n=snprintf(header,sizeof(header),"POST /api/v3/diagnostics/frame HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nContent-Type: image/jpeg\r\nContent-Length: %lld\r\nX-Diagnostics-Id: %s\r\nX-Device-Id: %s\r\n\r\n",host,(long long)st.st_size,token,config->device_id);
+    int ok=n>0 && (size_t)n<sizeof(header) && !send_all(fd,header,(size_t)n);
+    char chunk[8192]; off_t remaining=st.st_size;
+    while(ok && remaining>0) {
+        size_t wanted=remaining<(off_t)sizeof(chunk) ? (size_t)remaining : sizeof(chunk);
+        size_t count=fread(chunk,1,wanted,file);
+        if(count!=wanted || send_all(fd,chunk,count)) {ok=0; break;}
+        remaining-=count;
+    }
+    fclose(file);
+    char response[128]={0}; size_t length=0;
+    while(ok && length<sizeof(response)-1 && !strstr(response,"\r\n")) {
+        ssize_t count=recv(fd,response+length,sizeof(response)-1-length,0);
+        if(count<0 && errno==EINTR) continue;
+        if(count<=0) {ok=0; break;}
+        length+=(size_t)count; response[length]=0;
+    }
+    close(fd);
+    return ok && (!strncmp(response,"HTTP/1.1 200 ",13) || !strncmp(response,"HTTP/1.0 200 ",13)) ? 0 : -1;
+}
