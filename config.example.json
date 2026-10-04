@@ -1,8 +1,10 @@
 {
   "device_id": "CAM-000123",
-  "wifi_ssid": "ChinaNet-7HrK",
-  "pc_base_url": "http://192.168.0.20:8080",
-  "audio": {"volume": 10},
+  "wifi_ssid": "MinMax-test",
+  "pc_base_url": "http://192.168.101.2:8080",
+  "audio": {
+    "volume": 20
+  },
   "capture": {
     "width": 1280,
     "height": 1080,
@@ -12,5 +14,7 @@
     "bitrate_kbps": 4000,
     "duration_ms": 10000
   },
-  "battery": {"present": false}
+  "battery": {
+    "present": false
+  }
 }
