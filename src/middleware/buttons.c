@@ -7,7 +7,7 @@
 #include <fcntl.h>
 #include <string.h>
 /* left / middle / right: validated GPIO 3 / 4 / 0, active low.
- * GPIO export, direction and pull-up remain in S79buttons. */
+ * GPIO export, direction and pull-up belong to the platform adapter. */
 static lwbtn_t manager;
 static lwbtn_btn_t buttons[3];
 static int initialized, stable, released;
@@ -41,4 +41,33 @@ int buttons_snapshot(uint32_t now, int *mask) {
     int raw = 0, valid = !platform_button_raw(&raw);
     *mask = buttons_feed(now, valid, raw);
     return *mask < 0 ? -1 : 0;
+}
+
+/* Gesture timing is independent of record/upload workers. Invalid samples and
+ * disabled permissions fail closed; require a release before another hold. */
+int backlight_tick(uint64_t now, int keys, int allowed) {
+    static uint64_t held, release_at, previous;
+    static int pressing, lit, disarmed = 1;
+    int desired = lit;
+    if (!allowed || keys < 0 || (previous && now - previous > 100)) {
+        pressing = 0; release_at = 0; disarmed = 1; desired = 0;
+    } else {
+        if (!keys) disarmed = 0;
+        if (keys == 5 && !disarmed) {
+            if (!pressing) { pressing = 1; held = now; }
+            release_at = 0;
+            if (now - held >= 500) desired = 1;
+        } else {
+            if (pressing && lit) release_at = now + 1000;
+            pressing = 0;
+            if (release_at && now >= release_at) { desired = 0; release_at = 0; }
+        }
+    }
+    previous = now;
+    if (platform_backlight_set(desired)) { lit = 0; return -1; }
+    if (lit != desired) {
+        instrument_trace("backlight", "", "", "", desired ? "on" : "off");
+        lit = desired;
+    }
+    return 0;
 }

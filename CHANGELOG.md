@@ -1,3 +1,11 @@
+# 3.3.3 - Capture backlight and integrated hardware setup (2026-10-07)
+
+- Fix missing business backlight: allowed left+right hold 500 ms enables GPIO55; releasing either key delays off 1000 ms. Rehold cancels off; invalid sample/gap/permission loss and graceful exit fail closed.
+- Existing 1500 ms capture trigger, pairing PWM and audio remain; app supplies permission, middleware owns timer, platform owns GPIO/PWM and lock.
+- Compile validated GPIO/pull-up and configfs PWM setup into platform adapters. No deployed button_inputs.sh/light_pwm.sh/S79buttons; installer backs up and retires exact obsolete paths. Keep init/install/Wi-Fi deployment files.
+- Ignore regenerable validation products; bundle checks use temporary workspaces with automatic cleanup. Keep historical acceptance README and immutable old releases.
+- ARM and host timing/sysfs checks run; visual physical timing and cold-power boot require operator acceptance.
+
 # 3.3.2 - Pairing status indication (2026-10-07)
 
 - Normal center LED steady; actual open pairing window breathes through shared PWM2 helpers.

@@ -1,3 +1,9 @@
+# 3.3.3 部署文件职责
+
+输入按键和PWM硬件初始化已经编译进platform，应用不依赖同目录.sh。新发布包仅保留SDK启动RkLunch.sh、系统服务S80instrument、安装器、默认Wi-Fi配置与说明。安装器对旧硬件helper先备份再逐个清理。移植时修改platform，业务及计时留在app/middleware。
+
+以下历史操作以实际版本包文件为准。
+
 # 当前 Luckfox 板部署文件
 
 S80instrument 安装位置为 `/oem/usr/etc/init.d/S80instrument`；RkLunch.sh 为本板当前 `/RkLunch.sh`，仅对 RKiPC 注入 `luckfox_mux_adapter.so`，保留原厂其他启动逻辑。移植另一块 Linux 板时重新核对平台和启动配置。

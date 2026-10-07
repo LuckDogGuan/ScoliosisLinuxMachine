@@ -65,14 +65,65 @@ static int overlay(const char *action) {
     (void)action;
     return 0;
 #else
-    char script[512];
-    ssize_t count = readlink("/proc/self/exe", script, sizeof(script)-1);
-    if (count < 0) return -1;
-    script[count] = '\0';
-    char *slash = strrchr(script, '/');
-    if (!slash || (size_t)(slash-script)+25 >= sizeof(script)) return -1;
-    strcpy(slash+1, "light_pwm.sh");
-    char *args[] = {"sh", script, (char *)action, NULL};
+    /* Hardware-specific setup is compiled into the adapter; no sibling .sh. */
+    static const char setup[] =
+        "#!/bin/sh\n"
+        "# Existing luckfox-config configfs mechanism; transient PWM2_M0 only.\n"
+        "set -eu\n"
+        "overlay=/sys/kernel/config/device-tree/overlays/instrument-light-test\n"
+        "dt=/sys/firmware/devicetree/base\n"
+        "case \"$1\" in\n"
+        "--enable)\n"
+        "    [ \"$(tr -d '\\000' < \"$dt/pwm@ff350020/status\")\" = disabled ] || {\n"
+        "        echo 'PWM2 already enabled; refusing takeover' >&2; exit 1;\n"
+        "    }\n"
+        "    [ ! -e \"$overlay\" ] || { echo 'Light overlay already exists' >&2; exit 1; }\n"
+        "    command -v dtc >/dev/null\n"
+        "    handle=$(od -An -tx1 \"$dt/pinctrl/pwm2/pwm2m0-pins/phandle\" | tr -d ' \\n')\n"
+        "    case \"$handle\" in ??????\?\?) ;; *) echo 'Invalid PWM2_M0 phandle' >&2; exit 1;; esac\n"
+        "    work=$(mktemp -d /tmp/instrument-light-dt.XXXXXX)\n"
+        "    cleanup() {\n"
+        "        rm -f \"$work/pwm.dts\"\n"
+        "        rm -f \"$work/pwm.dtbo\"\n"
+        "        rmdir \"$work\"\n"
+        "    }\n"
+        "    trap cleanup EXIT\n"
+        "    cat > \"$work/pwm.dts\" <<EOF\n"
+        "/dts-v1/;\n"
+        "/plugin/;\n"
+        "/ {\n"
+        "    fragment@0 {\n"
+        "        target-path = \"/pwm@ff350020\";\n"
+        "        __overlay__ {\n"
+        "            pinctrl-0 = <0x$handle>;\n"
+        "            status = \"okay\";\n"
+        "        };\n"
+        "    };\n"
+        "};\n"
+        "EOF\n"
+        "    dtc -I dts -O dtb -o \"$work/pwm.dtbo\" \"$work/pwm.dts\"\n"
+        "    mkdir \"$overlay\"\n"
+        "    if ! cat \"$work/pwm.dtbo\" > \"$overlay/dtbo\" || ! echo 1 > \"$overlay/status\"; then\n"
+        "        echo 0 > \"$overlay/status\" || true\n"
+        "        rmdir \"$overlay\" || true\n"
+        "        exit 1\n"
+        "    fi\n"
+        "    [ \"$(cat \"$overlay/status\")\" = 1 ] || {\n"
+        "        echo 'Overlay did not activate' >&2\n"
+        "        echo 0 > \"$overlay/status\"\n"
+        "        rmdir \"$overlay\"\n"
+        "        exit 1\n"
+        "    }\n"
+        "    ;;\n"
+        "--disable)\n"
+        "    [ -d \"$overlay\" ] || exit 0\n"
+        "    echo 0 > \"$overlay/status\"\n"
+        "    rmdir \"$overlay\"\n"
+        "    ;;\n"
+        "*) echo 'Usage: light_pwm.sh --enable|--disable' >&2; exit 2;;\n"
+        "esac\n"
+        ;
+    char *args[] = {"sh", "-c", (char *)setup, "instrument-pwm", (char *)action, NULL};
     return run_command(args);
 #endif
 }
@@ -214,8 +265,26 @@ static struct {
     long long changed, next, retry;
     char chip[256];
 } status_light = {.lock=-1, .mode=-1, .last_duty=-1};
+static int backlight_owned, backlight_level = -1;
+int platform_backlight_set(int on) {
+    if (getenv("INSTRUMENT_HOST_TEST")) return 0;
+    if (status_light.lock < 0) return -1;
+    if (!backlight_owned) {
+        if (gpio_claim(55, &backlight_owned, 0)) return -1;
+        backlight_level = -1;
+    }
+    if (backlight_level == on) return 0;
+    if (gpio_write(55, "value", on ? "1" : "0")) return -1;
+    backlight_level = on;
+    return 0;
+}
 void light_status_close(void) {
     char path[512];
+    if (backlight_owned) {
+        (void)gpio_write(55, "value", "0");
+        (void)gpio_control(55, "unexport");
+        backlight_owned = 0; backlight_level = -1;
+    }
     if (status_light.pwm) {
         (void)pwm_write(status_light.chip,"duty_cycle",0);
         (void)pwm_write(status_light.chip,"enable",0);

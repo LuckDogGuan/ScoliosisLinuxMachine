@@ -16,3 +16,12 @@
 /tests/.discard_check
 
 /validation/*/*.instrument_app
+
+# Regenerable checks, extracted payloads and local build snapshots
+/validation/
+/image/uvc-test-*/
+
+# Preserve the concise historical acceptance report, omit raw logs.
+!/validation/capture-results-20261002/
+/validation/capture-results-20261002/*
+!/validation/capture-results-20261002/README.md

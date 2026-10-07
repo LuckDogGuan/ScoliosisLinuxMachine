@@ -1,3 +1,16 @@
+# 3.3.3 背光时序与硬件初始化收拢
+
+- 上位机允许拍摄时，左右键连续按住0.5秒打开背光；松开任意一个键后1秒关闭。短按不亮，等待关闭期间再次按住会取消关闭。
+- 实际录制仍在左右键按住1.5秒后开始。背光计时不等待录像/上传结束；权限失效、读键错误、采样中断、正常退出立即关闭。
+- app/runtime_v3.c给出拍摄权限；middleware/buttons.c统一计时；platform/light_test.c输出GPIO55及PWM，platform/luckfox_gpio.c初始化输入。
+- 原button_inputs.sh与light_pwm.sh逻辑编译进硬件层，用现有sh/devmem/dtc执行，不生成永久脚本文件；移植只修改platform。
+- 新payload/deploy保留RkLunch.sh（SDK相机/内核/网络启动）、S80instrument（Linux开机入口）、install_bundle.sh（备份校验安装）、wpa_supplicant.default.conf（默认配置）、README.md。这些不属于日常业务状态机。
+- 安装器先将旧button_inputs.sh、light_pwm.sh、S79buttons逐个纳入rollback-files.tar，再逐个移除。旧3.3.2包不修改。
+- validation为测试提取目录、日志、构建工具和本地回退副本，不参与运行；原始日志退出Git，保留capture-results-20261002/README.md历史验收摘要及必要回退副本。test_bundle改用临时目录，检查后不留解包树。
+- tests/test_backlight.py验证真实计时服务与GPIO写入边界，其他灯态/配对/上传/删除/打包回归继续运行。自动验证不能代替物理目视与断电验收。
+
+下文为历史说明，历史helper路径仅适用于3.3.1/3.3.2。
+
 # 3.3.2 配对状态灯与45秒窗口
 
 - 正常模式中键灯常亮；进入配对窗口中键灯以3秒周期呼吸。

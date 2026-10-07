@@ -7,6 +7,7 @@ uint64_t v3_now(void);
 uint64_t wall_ms(void);
 int runtime_run(Config *config);
 int buttons_snapshot(uint32_t now, int *mask);
+int backlight_tick(uint64_t now, int keys, int allowed);
 int buttons_feed(uint32_t now, int valid, int raw_mask);
 int capture_controlled(const Config *config, const char *id, int control_fd, int *duration_ms, int *reason);
 int http_v3_start(const Config *config, const char *id, const char *gate, const char *boot);

@@ -15,7 +15,7 @@ cp instrument_app luckfox_mux_adapter.so config.example.json CHANGELOG.md "$pack
 cp sounds/*.wav "$package/sounds/"
 cp docs/light-test.md "$package/docs/"
 cp deploy/RkLunch.sh deploy/S80instrument deploy/README.md deploy/install_bundle.sh \
-   deploy/button_inputs.sh deploy/S79buttons deploy/wpa_supplicant.default.conf deploy/light_pwm.sh "$package/deploy/"
+   deploy/wpa_supplicant.default.conf "$package/deploy/"
 printf '%s\n' "$version" > "$package/VERSION"
 printf 'version=%s\nrelease_tag=instrument-v%s\nsource_commit=%s\nbuild_utc=%s\n' \
   "$version" "$version" "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$package/BUILD.txt"

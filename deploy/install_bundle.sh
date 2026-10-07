@@ -7,7 +7,7 @@ mode=${1:---check}
 case "$mode" in --check|--install) ;; *) echo 'Usage: sh deploy/install_bundle.sh --check | --install --idle-confirmed [--replace-startup]' >&2; exit 2;; esac
 sha256sum -c SHA256SUMS
 [ -f instrument_app ] && [ -f luckfox_mux_adapter.so ] && [ -f deploy/RkLunch.sh ]
-[ -f deploy/button_inputs.sh ] && [ -f deploy/S79buttons ] && [ -f deploy/wpa_supplicant.default.conf ]
+[ -f deploy/wpa_supplicant.default.conf ]
 if [ -f deploy/light_pwm.sh ]; then sh -n deploy/light_pwm.sh; fi
 expected_sounds=20
 if [ -f sounds/pair_window_closed.wav ]; then expected_sounds=21; fi
@@ -52,7 +52,9 @@ cp /opt/instrument/config.json "$record/config-before.json"
 chmod 600 "$record/config-before.json"
 cp SHA256SUMS "$record/package-SHA256SUMS"
 printf 'instrument_app opt/instrument/bin/instrument_app\nluckfox_mux_adapter.so opt/instrument/bin/luckfox_mux_adapter.so\ndeploy/RkLunch.sh RkLunch.sh\ndeploy/S80instrument oem/usr/etc/init.d/S80instrument\nVERSION opt/instrument/installed-version\nBUILD.txt opt/instrument/installed-build.txt\n' >"$record/install-map.txt"
-printf 'deploy/button_inputs.sh opt/instrument/bin/button_inputs.sh\ndeploy/S79buttons oem/usr/etc/init.d/S79buttons\n' >>"$record/install-map.txt"
+# Optional historical helpers; new programs initialize hardware themselves.
+if [ -f deploy/button_inputs.sh ]; then printf 'deploy/button_inputs.sh opt/instrument/bin/button_inputs.sh\n' >>"$record/install-map.txt"; fi
+if [ -f deploy/S79buttons ]; then printf 'deploy/S79buttons oem/usr/etc/init.d/S79buttons\n' >>"$record/install-map.txt"; fi
 if [ -f deploy/light_pwm.sh ]; then printf 'deploy/light_pwm.sh opt/instrument/bin/light_pwm.sh\n' >>"$record/install-map.txt"; fi
 # Initialize factory Wi-Fi only. Existing real networks are preserved.
 printf 'deploy/wpa_supplicant.default.conf opt/instrument/defaults/wpa_supplicant.conf\n' >>"$record/install-map.txt"
@@ -70,6 +72,12 @@ if [ ! -f /etc/wpa_supplicant.conf ] || { [ "$(grep -c '^[[:space:]]*ssid=' /etc
     printf '%s etc/wpa_supplicant.conf\n' "$wifi_source" >>"$record/install-map.txt"
 fi
 for source in sounds/*.wav; do printf '%s opt/instrument/%s\n' "$source" "$source"; done >>"$record/install-map.txt"
+# Obsolete hardware helpers are individually backed up and retired for new payloads.
+if [ ! -f deploy/button_inputs.sh ] && [ ! -f deploy/light_pwm.sh ]; then
+    for destination in opt/instrument/bin/button_inputs.sh opt/instrument/bin/light_pwm.sh oem/usr/etc/init.d/S79buttons; do
+        if [ -f "/$destination" ]; then printf -- '- %s\n' "$destination" >>"$record/install-map.txt"; fi
+    done
+fi
 : >"$record/existing-files.txt"
 : >"$record/new-files.txt"
 : >"$record/before-SHA256SUMS"
@@ -96,6 +104,10 @@ if [ "$#" -gt 0 ]; then tar -cf "$record/rollback-files.tar" -C / "$@"; else tou
 sync
 : >"$record/after-SHA256SUMS"
 while read -r source destination; do
+    if [ "$source" = - ]; then
+        rm -f "/$destination"
+        continue
+    fi
     mkdir -p "$(dirname "/$destination")"
     cp "$source" "/$destination.bundle-new"
     case "$destination" in */wpa_supplicant.conf) chmod 600 "/$destination.bundle-new";; */instrument_app|*/button_inputs.sh|RkLunch.sh|*/S79buttons|*/S80instrument) chmod 755 "/$destination.bundle-new";; *) chmod 644 "/$destination.bundle-new";; esac

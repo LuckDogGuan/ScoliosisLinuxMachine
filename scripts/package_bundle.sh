@@ -29,7 +29,8 @@ output=bundles/$bundle_label
 name=instrument-$bundle_label
 mkdir -p "$output"
 cp -a "$release" "$output/$name"
-cp deploy/install_bundle.sh deploy/button_inputs.sh deploy/S79buttons deploy/wpa_supplicant.default.conf "$output/$name/deploy/"
+cp deploy/install_bundle.sh deploy/wpa_supplicant.default.conf "$output/$name/deploy/"
+# Historical source payload already contains its own hardware helpers.
 cp "$release/SHA256SUMS" "$output/$name/SOURCE_SHA256SUMS"
 printf 'bundle_source_release=%s\nbundle_tool_commit=%s\n' "$label" "$(git rev-parse HEAD)" > "$output/$name/BUNDLE.txt"
 (cd "$output/$name"; find . -type f ! -name SHA256SUMS -print | LC_ALL=C sort | xargs sha256sum > SHA256SUMS; sh deploy/install_bundle.sh --check)

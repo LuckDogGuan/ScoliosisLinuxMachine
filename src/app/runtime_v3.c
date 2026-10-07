@@ -1056,6 +1056,8 @@ int runtime_run(Config *config) {
         }
         discard_messages(&rt); notifier_messages(&rt); upload_messages(&rt); audio_messages(&rt); receive_udp(&rt, now); maintenance(&rt, now);
         int light_result=light_status_tick(rt.pair_window > now && !rt.paired && !rt.revoking,(long long)now);
+        (void)backlight_tick(now, rt.keys, rt.gate && now < rt.lease &&
+            now >= rt.diagnostics_lease && !rt.revoking);
         static int previous_light_result=-2, previous_light_mode=-1;
         int light_mode=rt.pair_window > now && !rt.paired && !rt.revoking;
         if (light_result!=previous_light_result || light_mode!=previous_light_mode) {

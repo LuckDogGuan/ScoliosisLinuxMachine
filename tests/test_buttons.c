@@ -2,6 +2,11 @@
 #include "lwbtn/lwbtn.h"
 #include <assert.h>
 #include <stdio.h>
+int platform_backlight_set(int on) { (void)on; return 0; }
+int run_command(char *const argv[]) { (void)argv; return -1; }
+void instrument_trace(const char *a,const char *b,const char *c,const char *d,const char *e) {
+    (void)a;(void)b;(void)c;(void)d;(void)e;
+}
 static uint32_t now;
 static int sample(int raw, unsigned count) {
     int state = -1;
