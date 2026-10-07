@@ -1,3 +1,4 @@
 archive_kind=pre-upgrade-recovery-baseline
 source_base_commit=82e16b4ca6e7ef7a24cbae82477cfbd3da79543e
 reproducible_binary=not_proven
+release_tag=instrument-baseline-20261001

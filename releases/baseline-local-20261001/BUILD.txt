@@ -1,0 +1,4 @@
+archive_kind=original-local-recovery-archives
+release_tag=instrument-baseline-local-20261001
+source_base_commit=82e16b4ca6e7ef7a24cbae82477cfbd3da79543e
+rebuild_and_hardware_acceptance=not_claimed

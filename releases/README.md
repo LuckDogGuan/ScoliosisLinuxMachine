@@ -14,3 +14,5 @@ BUILD 中 `source_commit` 指实际源码提交，旧 `source_base_commit` 仅�
 UVC 构建材料在 `../tools/uvc-v1.0.0/`，Windows 仪器测试工具保留其必要 runtime payload；二者职责不同。
 
 历史包可按需解包到临时目录，包内 `SHA256SUMS` 校验原始内容。历史文档中的 image/payload 路径属于当时记录，当前入口以本说明为准。
+
+恢复/审计档案（不作为正式固件验收）：`baseline-20261001`、`baseline-local-20261001`、`baseline-source-audit-20261001`，各用同名 `instrument-<目录名>` tag 关联。
