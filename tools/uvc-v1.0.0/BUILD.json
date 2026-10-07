@@ -1,0 +1,12 @@
+{
+  "sdk_commit": "824b817f889c2cbff1d48fcdb18ab494a68f69d1",
+  "compiler": "/home/guanjx/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-gcc",
+  "reference_board": "41eda5f2c5b00de1",
+  "kernel": "5.10.160",
+  "reference_libraries": "/home/guanjx/luckfox/uvc-build/lib",
+  "adaptations": [
+    "private config path only in C macro constants",
+    "single official MJPEG configfs descriptor for ISG1321",
+    "VI/VPSS frame-rate request; actual output remains approximately 58.6 FPS"
+  ]
+}
