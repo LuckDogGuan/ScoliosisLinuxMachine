@@ -1,3 +1,21 @@
+# 3.3.4 设备测试、短录像和东八区
+
+Flutter入口：设备 → 设备测试。背光滑杆0–100，松手后发送，设备确认成功后才显示已设置亮度。0为关闭，100为全亮；亮度保存到/opt/instrument/state/backlight.json，正常拍摄沿用。设备测试开始为关闭；结束、断线租约到期或正常退出关闭。GPIO55复用PWM11_M1，1kHz占空比=百分比；不采用软件PWM，也不变更接线。实体亮度均匀性与控制端兼容性需目视/模块参数验收。
+
+不足3000ms：结果short，提示重拍，上下位机均不授权上传；视频保留在仪器，未自动删除。3000ms及以上且录像成功才可上传。旧固件2–3秒success在新Flutter中归为short，避免历史事件反复重试；不改写已经上传的历史文件。
+
+调试JPEG仍为传感器1280×1080，质量95，缓冲与HTTP上限4MiB；Flutter显示900像素宽预览区域、400像素高画面，高质量缩放。压缩改善不能替代镜头对焦/曝光验收。
+
+/etc/TZ与RKiPC/业务进程使用CST-8（POSIX符号为负，表示UTC+8）。系统时钟、RTC、协议started_at_ms继续存UTC，不能将epoch加8小时。Flutter统一beijingTime显示，北京时间17:12对应09:12Z；16:00Z跨日显示次日00:00。
+
+构建/回归：make all mux-adapter；make check-host；python3 tests/test_capture_minimum.py；python3 tests/test_backlight.py；python3 tests/test_diagnostics_backlight.py；python3 tests/test_light.py；python3 tests/test_status_light.py；python3 tests/test_pair_lights.py。
+
+安装使用完整instrument-v3.3.4.tar.gz，先核对设备序列号/应用ID/空闲状态。现有deploy/install_bundle.sh --install --idle-confirmed --replace-startup保存旧文件与校验，/etc/TZ也在install-map内；配置、配对、视频不覆盖。安装前人工核对启动脚本差异。启动新版业务与RKiPC后核对版本、文件校验、JPEG参数、进程TZ和实际录像。
+
+回退：在设备空闲并停止instrument_app/rkipc后，按安装记录existing-files.txt、new-files.txt恢复同目录rollback-files.tar中的明确旧路径；无旧/etc/TZ时移走新/etc/TZ。相机配置的本轮修改前副本单独保存于本轮设备backups目录，恢复后按原LD_PRELOAD启动相机。保留所有待传数据。
+
+以下为历史独立灯光测试说明：
+
 # 3.3.3 背光时序与硬件初始化收拢
 
 - 上位机允许拍摄时，左右键连续按住0.5秒打开背光；松开任意一个键后1秒关闭。短按不亮，等待关闭期间再次按住会取消关闭。

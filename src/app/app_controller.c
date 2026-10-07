@@ -5,9 +5,12 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <syslog.h>
+#include <time.h>
 int legacy_run(Config config);
 int light_test_main(int argc, char **argv);
 int main(int argc, char **argv) {
+    if (setenv("TZ", "CST-8", 1)) return 1;
+    tzset();
     if (argc >= 2 && !strcmp(argv[1], "--light-test"))
         return light_test_main(argc - 2, argv + 2);
     if (argc == 2 && !strcmp(argv[1], "--version")) {

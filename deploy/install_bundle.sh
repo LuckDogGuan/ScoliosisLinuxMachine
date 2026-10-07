@@ -71,6 +71,7 @@ if [ ! -f /etc/wpa_supplicant.conf ] || { [ "$(grep -c '^[[:space:]]*ssid=' /etc
     fi
     printf '%s etc/wpa_supplicant.conf\n' "$wifi_source" >>"$record/install-map.txt"
 fi
+if [ -f deploy/TZ ]; then printf 'deploy/TZ etc/TZ\n' >>"$record/install-map.txt"; fi
 for source in sounds/*.wav; do printf '%s opt/instrument/%s\n' "$source" "$source"; done >>"$record/install-map.txt"
 # Obsolete hardware helpers are individually backed up and retired for new payloads.
 if [ ! -f deploy/button_inputs.sh ] && [ ! -f deploy/light_pwm.sh ]; then

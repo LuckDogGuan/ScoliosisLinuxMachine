@@ -163,7 +163,7 @@ int camera_diagnostic_frame(const Config *config, const char *token) {
         closedir(dir);
         if(path[0]) {
             struct stat st; unsigned char end[2]; int fd=open(path,O_RDONLY|O_CLOEXEC);
-            int complete=fd>=0 && !fstat(fd,&st) && st.st_size>=4 && st.st_size<=1048576 &&
+            int complete=fd>=0 && !fstat(fd,&st) && st.st_size>=4 && st.st_size<=4194304 &&
                 st.st_size==previous && lseek(fd,-2,SEEK_END)>=0 && read(fd,end,2)==2 && end[0]==255 && end[1]==217;
             if(fd>=0) close(fd);
             if(complete) {

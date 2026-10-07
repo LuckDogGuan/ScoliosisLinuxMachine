@@ -78,6 +78,7 @@ typedef struct {
     int rssi, gateway_failures, wifi_seen;
     uint64_t startup_at, diagnostics_lease, diagnostics_next;
     char diagnostics_id[ID_SIZE];
+    int backlight_brightness, diagnostics_brightness;
     Worker diagnostics;
     Worker record, upload, maintenance, notifier, audio, discard;
     char maintenance_type;
@@ -323,7 +324,7 @@ static void completed(Runtime *rt, const WorkerResult *result) {
     cJSON_AddStringToObject(event, "gate_id", rt->current_gate);
     cJSON_AddStringToObject(event, "event_id", event_id);
     cJSON_AddStringToObject(event, "phase", "completed");
-    cJSON_AddStringToObject(event, "result", result->result ? "failed" : result->duration < 2000 ? "short" : "success");
+    cJSON_AddStringToObject(event, "result", result->result ? "failed" : result->duration < 3000 ? "short" : "success");
     cJSON_AddNumberToObject(event, "duration_ms", result->duration);
     cJSON_AddNumberToObject(event, "started_at_ms", (double)rt->started_at);
     cJSON_AddNumberToObject(event, "ended_at_ms", rt->started_at ? (double)(rt->started_at + (unsigned)result->duration) : 0);
@@ -358,7 +359,7 @@ static void completed(Runtime *rt, const WorkerResult *result) {
     rt->completion_pending = 0; rt->completion_event[0] = 0;
     rt->recording = 0; rt->current_id[0] = 0; rt->started_at = 0;
     COPY(rt->phase, rt->capture_id[0] ? "prepared" : "idle");
-    queue_sound(rt, result->result ? "capture_failed" : result->duration < 2000 ? "capture_short" : "capture_done");
+    queue_sound(rt, result->result ? "capture_failed" : result->duration < 3000 ? "capture_short" : "capture_done");
     rt->last_maintenance = 0;
     if (rt->revoking) (void)local_unpair(rt);
     cJSON *empty = cJSON_CreateObject();
@@ -524,7 +525,7 @@ static void begin_upload(Runtime *rt, const cJSON *request, cJSON *reply) {
     snprintf(path, sizeof(path), "%s/%s.mp4", PENDING_DIR, id);
     snprintf(metadata_path, sizeof(metadata_path), "%s/%s.json", PENDING_DIR, id);
     cJSON *metadata = v3_read_json(metadata_path); struct stat info;
-    int match = metadata && !stat(path, &info) && num(request, "size_bytes") == (double)info.st_size &&
+    int match = metadata && !strcmp(str(metadata, "result"), "success") && num(metadata, "duration_ms") >= 3000 && !stat(path, &info) && num(request, "size_bytes") == (double)info.st_size &&
                 !strcmp(str(request, "sha256"), str(metadata, "sha256"));
     cJSON_Delete(metadata); if (!match) return;
     uint64_t deadline = v3_now() + (unsigned)ttl;
@@ -639,7 +640,7 @@ static cJSON *base_reply(Runtime *rt, const cJSON *request) {
 static void hello_reply(Runtime *rt, cJSON *reply, uint64_t now) {
     cJSON_ReplaceItemInObjectCaseSensitive(reply, "ok", cJSON_CreateTrue());
     cJSON *capabilities = cJSON_AddArrayToObject(reply, "capabilities");
-    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard"};
+    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard", "backlight_brightness"};
     for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); i++) cJSON_AddItemToArray(capabilities, cJSON_CreateString(names[i]));
     cJSON_AddStringToObject(reply, "paired_host_id", rt->revoking ? "" : rt->host);
     cJSON_AddNumberToObject(reply, "volume", rt->audio_volume);
@@ -846,10 +847,28 @@ static void receive_udp(Runtime *rt, uint64_t now) {
                 }
             } else cJSON_AddStringToObject(reply,"error","busy_or_invalid_time");
             cJSON_AddNumberToObject(reply,"utc_ms",(double)wall_ms());
+        } else if (!strcmp(op, "diagnostics_backlight")) {
+            double percent=num(request,"brightness");
+            if (now < rt->diagnostics_lease && !strcmp(rt->diagnostics_id,str(request,"diagnostics_id")) &&
+                percent >= 0 && percent <= 100 && percent == (int)percent) {
+                if (!platform_backlight_percent((int)percent)) {
+                    cJSON *setting=cJSON_CreateObject();
+                    if (setting) {
+                        cJSON_AddNumberToObject(setting,"brightness",percent);
+                        if (!v3_save_json(STATE_DIR "/backlight.json",setting)) {
+                            rt->backlight_brightness=rt->diagnostics_brightness=(int)percent;
+                            platform_backlight_configure((int)percent); success=1;
+                        } else (void)platform_backlight_percent(rt->diagnostics_brightness);
+                        cJSON_Delete(setting);
+                    } else (void)platform_backlight_percent(rt->diagnostics_brightness);
+                }
+            }
+            if (!success) cJSON_AddStringToObject(reply,"error","backlight_unavailable_or_invalid");
+            cJSON_AddNumberToObject(reply,"brightness",rt->diagnostics_brightness);
         } else if (!strcmp(op, "diagnostics_start")) {
             const char *id = str(request,"diagnostics_id"); int ttl=(int)num(request,"ttl_ms");
             if (!rt->gate && !rt->record.pid && !rt->completion_pending && !rt->upload.pid && !rt->diagnostics.pid && safe_id(id) && ttl>0 && ttl<=6000) {
-                COPY(rt->diagnostics_id,id); rt->diagnostics_lease=now+(unsigned)ttl; rt->diagnostics_next=now;
+                rt->diagnostics_brightness=0; COPY(rt->diagnostics_id,id); rt->diagnostics_lease=now+(unsigned)ttl; rt->diagnostics_next=now;
                 rt->hold_started=rt->middle_hold=0; rt->release_required=1; success=1;
             }
         } else if (!strcmp(op,"diagnostics_renew") || !strcmp(op,"diagnostics_status") || !strcmp(op,"diagnostics_end")) {
@@ -859,6 +878,7 @@ static void receive_udp(Runtime *rt, uint64_t now) {
                 else if (!strcmp(op,"diagnostics_status")) success=1;
                 else if (ttl>0 && ttl<=6000) {rt->diagnostics_lease=now+(unsigned)ttl; success=1;}
             }
+            cJSON_AddNumberToObject(reply,"brightness",rt->diagnostics_brightness);
             cJSON_AddNumberToObject(reply,"key_mask",rt->keys);
             cJSON_AddNumberToObject(reply,"remaining_ms",rt->diagnostics_lease>now ? (double)(rt->diagnostics_lease-now) : 0);
         } else if (!strcmp(op, "unpair")) {
@@ -966,6 +986,10 @@ static void close_pair_window(Runtime *rt, const char *reason) {
 int runtime_run(Config *config) {
     Runtime rt = {.config = config, .audio_volume = config->volume, .keys = -1, .release_required = 1, .rssi = -100,
                   .free_mb = -1, .total_mb = -1, .available_mb = -1, .memory_mb = -1};
+    cJSON *backlight=v3_read_json(STATE_DIR "/backlight.json");
+    double brightness=num(backlight,"brightness");
+    rt.backlight_brightness=brightness >= 0 && brightness <= 100 && brightness == (int)brightness ? (int)brightness : 100;
+    platform_backlight_configure(rt.backlight_brightness); cJSON_Delete(backlight);
     rt.startup_at = v3_now();
     COPY(rt.phase, "idle"); COPY(rt.wifi_state, "unknown");
     if (mkdir(EVENTS_DIR, 0700) && errno != EEXIST) return 1;
@@ -1056,8 +1080,8 @@ int runtime_run(Config *config) {
         }
         discard_messages(&rt); notifier_messages(&rt); upload_messages(&rt); audio_messages(&rt); receive_udp(&rt, now); maintenance(&rt, now);
         int light_result=light_status_tick(rt.pair_window > now && !rt.paired && !rt.revoking,(long long)now);
-        (void)backlight_tick(now, rt.keys, rt.gate && now < rt.lease &&
-            now >= rt.diagnostics_lease && !rt.revoking);
+        if (now < rt.diagnostics_lease) (void)platform_backlight_percent(rt.diagnostics_brightness);
+        else (void)backlight_tick(now, rt.keys, rt.gate && now < rt.lease && !rt.revoking);
         static int previous_light_result=-2, previous_light_mode=-1;
         int light_mode=rt.pair_window > now && !rt.paired && !rt.revoking;
         if (light_result!=previous_light_result || light_mode!=previous_light_mode) {

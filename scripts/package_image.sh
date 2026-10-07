@@ -14,7 +14,7 @@ mkdir -p "$package/sounds" "$package/deploy" "$package/docs"
 cp instrument_app luckfox_mux_adapter.so config.example.json CHANGELOG.md "$package/"
 cp sounds/*.wav "$package/sounds/"
 cp docs/light-test.md "$package/docs/"
-cp deploy/RkLunch.sh deploy/S80instrument deploy/README.md deploy/install_bundle.sh \
+cp deploy/TZ deploy/RkLunch.sh deploy/S80instrument deploy/README.md deploy/install_bundle.sh \
    deploy/wpa_supplicant.default.conf "$package/deploy/"
 printf '%s\n' "$version" > "$package/VERSION"
 printf 'version=%s\nrelease_tag=instrument-v%s\nsource_commit=%s\nbuild_utc=%s\n' \

@@ -60,27 +60,32 @@ static int gpio_claim(int pin, int *owned, int high) {
     *owned = 1;
     return gpio_write(pin, "direction", high ? "high" : "low");
 }
-static int overlay(const char *action) {
+static int pwm_overlay(const char *action, int backlight) {
 #ifdef LIGHT_TEST_HOST
-    (void)action;
+    (void)action; (void)backlight;
     return 0;
 #else
     /* Hardware-specific setup is compiled into the adapter; no sibling .sh. */
     static const char setup[] =
         "#!/bin/sh\n"
-        "# Existing luckfox-config configfs mechanism; transient PWM2_M0 only.\n"
+        "# Existing luckfox-config configfs mechanism; transient PWM2_M0 / PWM11_M1.\n"
         "set -eu\n"
-        "overlay=/sys/kernel/config/device-tree/overlays/instrument-light-test\n"
+        "case \"$2\" in\n"
+        "backlight) unit=ff490030; pins=pwm11/pwm11m1-pins; suffix=backlight ;;\n"
+        "center) unit=ff350020; pins=pwm2/pwm2m0-pins; suffix=light-test ;;\n"
+        "*) exit 2 ;;\n"
+        "esac\n"
+        "overlay=/sys/kernel/config/device-tree/overlays/instrument-$suffix\n"
         "dt=/sys/firmware/devicetree/base\n"
         "case \"$1\" in\n"
         "--enable)\n"
-        "    [ \"$(tr -d '\\000' < \"$dt/pwm@ff350020/status\")\" = disabled ] || {\n"
-        "        echo 'PWM2 already enabled; refusing takeover' >&2; exit 1;\n"
+        "    [ \"$(tr -d '\\000' < \"$dt/pwm@$unit/status\")\" = disabled ] || {\n"
+        "        echo 'PWM already enabled; refusing takeover' >&2; exit 1;\n"
         "    }\n"
         "    [ ! -e \"$overlay\" ] || { echo 'Light overlay already exists' >&2; exit 1; }\n"
         "    command -v dtc >/dev/null\n"
-        "    handle=$(od -An -tx1 \"$dt/pinctrl/pwm2/pwm2m0-pins/phandle\" | tr -d ' \\n')\n"
-        "    case \"$handle\" in ??????\?\?) ;; *) echo 'Invalid PWM2_M0 phandle' >&2; exit 1;; esac\n"
+        "    handle=$(od -An -tx1 \"$dt/pinctrl/$pins/phandle\" | tr -d ' \\n')\n"
+        "    case \"$handle\" in ??????\?\?) ;; *) echo 'Invalid PWM pin phandle' >&2; exit 1;; esac\n"
         "    work=$(mktemp -d /tmp/instrument-light-dt.XXXXXX)\n"
         "    cleanup() {\n"
         "        rm -f \"$work/pwm.dts\"\n"
@@ -93,7 +98,7 @@ static int overlay(const char *action) {
         "/plugin/;\n"
         "/ {\n"
         "    fragment@0 {\n"
-        "        target-path = \"/pwm@ff350020\";\n"
+        "        target-path = \"/pwm@$unit\";\n"
         "        __overlay__ {\n"
         "            pinctrl-0 = <0x$handle>;\n"
         "            status = \"okay\";\n"
@@ -123,19 +128,20 @@ static int overlay(const char *action) {
         "*) echo 'Usage: light_pwm.sh --enable|--disable' >&2; exit 2;;\n"
         "esac\n"
         ;
-    char *args[] = {"sh", "-c", (char *)setup, "instrument-pwm", (char *)action, NULL};
+    char *args[] = {"sh", "-c", (char *)setup, "instrument-pwm", (char *)action, backlight ? "backlight" : "center", NULL};
     return run_command(args);
 #endif
 }
+static int overlay(const char *action) { return pwm_overlay(action, 0); }
 static int pwm_write(const char *chip, const char *name, long value) {
     char path[512], number[32];
     snprintf(path, sizeof(path), "%s/pwm0/%s", chip, name);
     snprintf(number, sizeof(number), "%ld", value);
     return put(path, number);
 }
-static int pwm_find(char *chip, size_t size) {
+static int pwm_find_device(char *chip, size_t size, int backlight) {
 #ifdef LIGHT_TEST_HOST
-    snprintf(chip, size, "%s/class/pwm/pwmchip0", sysroot());
+    snprintf(chip, size, "%s/class/pwm/pwmchip%d", sysroot(), backlight ? 1 : 0);
     return access(chip, F_OK);
 #else
     for (int i=0; i<32; i++) {
@@ -144,7 +150,7 @@ static int pwm_find(char *chip, size_t size) {
         ssize_t count=readlink(link,target,sizeof(target)-1);
         if (count<0) continue;
         target[count]='\0';
-        if (strstr(target,"/ff350020.pwm")) {
+        if (strstr(target,backlight ? "/ff490030.pwm" : "/ff350020.pwm")) {
             snprintf(chip,size,"/sys/class/pwm/pwmchip%d",i); return 0;
         }
     }
@@ -152,6 +158,7 @@ static int pwm_find(char *chip, size_t size) {
     return -1;
 #endif
 }
+static int pwm_find(char *chip, size_t size) { return pwm_find_device(chip, size, 0); }
 static long duty(const char *mode, long elapsed) {
     if (!strcmp(mode,"off")) return 0;
     if (!strcmp(mode,"on")) return PERIOD_NS;
@@ -265,18 +272,60 @@ static struct {
     long long changed, next, retry;
     char chip[256];
 } status_light = {.lock=-1, .mode=-1, .last_duty=-1};
-static int backlight_owned, backlight_level = -1;
-int platform_backlight_set(int on) {
+static int backlight_owned, backlight_level = -1, backlight_pwm, backlight_overlay;
+static int backlight_brightness = 100;
+static char backlight_chip[256];
+static void backlight_pwm_close(void) {
+    if (backlight_pwm) {
+        (void)pwm_write(backlight_chip,"duty_cycle",0);
+        (void)pwm_write(backlight_chip,"enable",0);
+        char path[512]; snprintf(path,sizeof(path),"%s/unexport",backlight_chip);
+        (void)put(path,"0"); backlight_pwm=0;
+    }
+    if (backlight_overlay) { (void)pwm_overlay("--disable",1); backlight_overlay=0; }
+    backlight_level=-1;
+}
+void platform_backlight_configure(int percent) {
+    if (percent >= 0 && percent <= 100) backlight_brightness = percent;
+}
+int platform_backlight_percent(int percent) {
+    if (percent < 0 || percent > 100) return -1;
     if (getenv("INSTRUMENT_HOST_TEST")) return 0;
     if (status_light.lock < 0) return -1;
-    if (!backlight_owned) {
-        if (gpio_claim(55, &backlight_owned, 0)) return -1;
+    if (backlight_level == percent) return 0;
+    if (percent > 0 && percent < 100 && !backlight_pwm) {
+        if (backlight_owned) {
+            if (gpio_write(55,"value","0") || gpio_control(55,"unexport")) return -1;
+            backlight_owned = 0;
+        }
         backlight_level = -1;
+        if (!backlight_overlay) {
+            if (pwm_overlay("--enable",1)) return -1;
+            backlight_overlay = 1;
+        }
+        if (pwm_find_device(backlight_chip,sizeof(backlight_chip),1)) { backlight_pwm_close(); return -1; }
+        char path[512]; snprintf(path,sizeof(path),"%s/export",backlight_chip);
+#ifndef LIGHT_TEST_HOST
+        char exported[512]; snprintf(exported,sizeof(exported),"%s/pwm0",backlight_chip);
+        if (!access(exported,F_OK)) { backlight_pwm_close(); return -1; }
+#endif
+        if (put(path,"0")) { backlight_pwm_close(); return -1; }
+        backlight_pwm = 1;
+        if (pwm_write(backlight_chip,"period",PERIOD_NS) ||
+            pwm_write(backlight_chip,"duty_cycle",0) ||
+            pwm_write(backlight_chip,"enable",1)) { backlight_pwm_close(); return -1; }
     }
-    if (backlight_level == on) return 0;
-    if (gpio_write(55, "value", on ? "1" : "0")) return -1;
-    backlight_level = on;
+    if (backlight_pwm) {
+        if (pwm_write(backlight_chip,"duty_cycle",PERIOD_NS * percent / 100)) return -1;
+    } else {
+        if (!backlight_owned && gpio_claim(55,&backlight_owned,0)) return -1;
+        if (gpio_write(55,"value",percent ? "1" : "0")) return -1;
+    }
+    backlight_level = percent;
     return 0;
+}
+int platform_backlight_set(int on) {
+    return platform_backlight_percent(on ? backlight_brightness : 0);
 }
 void light_status_close(void) {
     char path[512];
@@ -285,6 +334,7 @@ void light_status_close(void) {
         (void)gpio_control(55, "unexport");
         backlight_owned = 0; backlight_level = -1;
     }
+    backlight_pwm_close();
     if (status_light.pwm) {
         (void)pwm_write(status_light.chip,"duty_cycle",0);
         (void)pwm_write(status_light.chip,"enable",0);

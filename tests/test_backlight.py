@@ -38,6 +38,17 @@ int main(void) {
     tick(13410,0,1,0);tick(13420,5,1,0);
     for(uint64_t t=13430;t<=13920;t+=10) tick(t,5,1,t<13920?0:1);
     tick(13930,5,0,0);tick(13940,5,1,0); /* lease/gate loss */
+    assert(platform_backlight_percent(-1)==-1 && platform_backlight_percent(101)==-1);
+    for(int percent=0;percent<=100;percent++) {
+        assert(platform_backlight_percent(percent)==0);
+        if(percent>0) {
+            char p[512];snprintf(p,sizeof(p),"%s/class/pwm/pwmchip1/pwm0/duty_cycle",sysroot());
+            FILE *f=fopen(p,"r");long duty=-1;assert(f && fscanf(f,"%ld",&duty)==1);fclose(f);
+            assert(duty==1000000L*percent/100);
+        }
+    }
+    platform_backlight_configure(37); assert(platform_backlight_set(1)==0);
+    assert(backlight_level==37); assert(platform_backlight_set(0)==0); assert(backlight_level==0);
     light_status_close();assert(read_level()==0);
 }
 ''')
@@ -45,6 +56,8 @@ int main(void) {
     names += [f"class/gpio/gpio{pin}/{n}" for pin in (32,55) for n in ("direction","value")]
     names += ["class/pwm/pwmchip0/export","class/pwm/pwmchip0/unexport"]
     names += ["class/pwm/pwmchip0/pwm0/"+n for n in ("enable","duty_cycle","period","polarity")]
+    names += ["class/pwm/pwmchip1/export","class/pwm/pwmchip1/unexport"]
+    names += ["class/pwm/pwmchip1/pwm0/"+n for n in ("enable","duty_cycle","period","polarity")]
     for n in names:
         p=tmp/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_text("")
     exe=tmp/"test"

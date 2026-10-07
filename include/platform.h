@@ -12,6 +12,8 @@ int camera_stop(void);
 int camera_status(int *status);
 int platform_button_raw(int *mask);
 int platform_backlight_set(int on);
+int platform_backlight_percent(int percent);
+void platform_backlight_configure(int percent);
 void instrument_trace_protocol(const cJSON *request, const cJSON *reply, const char *boot, const char *endpoint);
 void instrument_trace(const char *event, const char *capture, const char *gate, const char *boot, const char *detail);
 #endif

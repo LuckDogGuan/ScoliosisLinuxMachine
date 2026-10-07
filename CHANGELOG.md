@@ -1,3 +1,13 @@
+## 3.3.4 — 2026-10-07
+
+- 不足3000 ms的录像判为short；设备端上传授权拒绝short/failed及不足3000 ms，原始短视频保留，不删除。
+- Flutter同时拦截不足3秒上传，将旧固件2–3秒success事件正常确认成short并安排重拍。
+- 设备测试增加0–100背光亮度，GPIO55/PWM11_M1（ff490030）硬件PWM 1 kHz；保存到state/backlight.json，诊断退出/租约到期关闭，后续拍摄使用保存亮度。
+- 调试JPEG质量70→95、缓冲与传输上限4 MiB，保留1280×1080原始相机分辨率，Flutter放大预览并使用高质量缩放。
+- 固件和RKiPC显式TZ=CST-8；安装/etc/TZ（纳入安装备份），UTC Unix时间戳与RTC不加8小时，文件名/OSD/Flutter显示东八区。
+- 回归：实际completed/begin_upload的1999/2000/2999/3000边界；UDP亮度范围/身份/租约/持久化；0–100占空比；原GPIO时序/配对灯；Flutter上传授权/完成事件/UTC+8测试。
+- 实板与发布记录见Windows调试/记录/capture-fixes-20261007。物理亮度与画质、按键长短录像、断电验收按实板记录区分，不由主机测试推定。
+
 # 3.3.3 - Capture backlight and integrated hardware setup (2026-10-07)
 
 - Fix missing business backlight: allowed left+right hold 500 ms enables GPIO55; releasing either key delays off 1000 ms. Rehold cancels off; invalid sample/gap/permission loss and graceful exit fail closed.

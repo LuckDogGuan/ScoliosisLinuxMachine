@@ -429,7 +429,7 @@ int http_v3_status(const Config *config, const cJSON *event) {
 int http_diagnostic_frame(const Config *config, const char *token, const char *path) {
     FILE *file=fopen(path,"rb"); if(!file) return -1;
     struct stat st;
-    if(fstat(fileno(file),&st) || st.st_size<4 || st.st_size>1048576) {fclose(file); return -1;}
+    if(fstat(fileno(file),&st) || st.st_size<4 || st.st_size>4194304) {fclose(file); return -1;}
     char host[64]; int fd=connect_pc(config,host,sizeof(host));
     if(fd<0) {fclose(file); return -1;}
     struct timeval timeout={.tv_sec=3};
