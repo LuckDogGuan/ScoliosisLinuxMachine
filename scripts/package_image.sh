@@ -1,5 +1,5 @@
 #!/bin/sh
-# One formal version -> one immutable complete payload under releases/<version>.
+# One formal version -> one immutable archive plus metadata under releases/<version>.
 set -eu
 cd "$(dirname "$0")/.."
 version=$(sed -n 's/^#define INSTRUMENT_VERSION "\([^"]*\)"/\1/p' include/app.h)
@@ -23,4 +23,4 @@ printf 'Complete ARM/uClibc application payload. Keep config, pairing, state and
 cp docs/light-test.md "releases/$version/VERSION.md"
 cp "$package/BUILD.txt" "releases/$version/BUILD.txt"
 (cd "$package"; find . -type f ! -name SHA256SUMS -print | LC_ALL=C sort | xargs sha256sum > SHA256SUMS; cp SHA256SUMS SOURCE_SHA256SUMS; find . -type f ! -name SHA256SUMS -print | LC_ALL=C sort | xargs sha256sum > SHA256SUMS; sh deploy/install_bundle.sh --check)
-echo "Packaged: $package"
+bash scripts/package_bundle.sh "$version"

@@ -1,3 +1,0 @@
-bundle_source_release=v3.3.0-20261004-minmax-volume20
-bundle_tool_commit=b3ec43e856321243c4567b541ab3ac3a6fd54cab
-bundle_created_utc=2026-10-04T08:34:09Z

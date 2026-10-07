@@ -1,6 +1,0 @@
-#!/bin/sh
-case "${1:-}" in
-    start)
-        /bin/sh /opt/instrument/bin/button_inputs.sh >/tmp/button-input-start.log 2>&1
-        ;;
-esac

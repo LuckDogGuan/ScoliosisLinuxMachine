@@ -10,7 +10,7 @@
 /tests/.struct_sizes.o
 /tests/.baseline_app
 
-# Historical local archives; release archives are tracked under image/
+# Historical local archives; formal archives are tracked under releases/
 /baseline/
 
 /tests/.discard_check
@@ -25,3 +25,8 @@
 !/validation/capture-results-20261002/
 /validation/capture-results-20261002/*
 !/validation/capture-results-20261002/README.md
+
+# Payload is temporary staging, never a second version archive.
+/releases/*/payload/
+/releases/*/*.tmp
+/releases/*/.payload-*

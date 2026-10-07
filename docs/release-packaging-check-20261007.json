@@ -1,0 +1,9 @@
+{
+  "existing_archive_unchanged": true,
+  "staged_bundle_verified": true,
+  "payload_removed_after_compare": true,
+  "repeat_finalize_read_only": true,
+  "invalid_label_rejected": true,
+  "duplicate_version_rejected": true,
+  "note": "Used immutable 3.3.4 payload in isolated fixture; no rebuild or device operation."
+}

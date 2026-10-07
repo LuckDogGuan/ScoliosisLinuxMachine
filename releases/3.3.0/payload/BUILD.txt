@@ -1,3 +1,0 @@
-version=3.3.0
-release_tag=instrument-v3.3.0-20261004-minmax-volume20
-source_base_commit=b3ec43e856321243c4567b541ab3ac3a6fd54cab
