@@ -27,6 +27,7 @@ SOURCES = \
 	src/platform/luckfox_battery.c \
 	src/platform/luckfox_button.c \
 	src/platform/luckfox_light.c \
+	src/platform/light_test.c \
 	third_party/cjson/cJSON.c
 
 all: $(TARGET)

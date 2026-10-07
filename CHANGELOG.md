@@ -1,3 +1,12 @@
+# 3.3.1 - Standalone light diagnostic (2026-10-07)
+
+- Add bounded --light-test before business initialization: center off/on/slow/fast/breathe and manual backlight.
+- Use Linux sysfs, flock and installed configfs/DT compiler; only transient PWM2_M0. Keep light_update, pairing, capture and three-key policy unchanged.
+- GPIO32 return requires operator verification; unknown/occupied resources fail explicitly.
+- Normal timeout, INT/TERM/HUP and handled errors clean outputs; SIGKILL/power loss need reboot/manual recovery.
+- Formal releases/<version>, complete payload, immutable archive, source commit and annotated tag.
+- Host mode/timing/signal/fault tests and existing upload/pending/discard/buttons checks passed. Visual/electrical and cold-power acceptance remain manual. See docs/light-test.md.
+
 # 3.3.0 - Capture deletion while permission remains enabled (2026-10-02)
 
 - Proof-bound durable discard intent, stop only the matched upload with SIGKILL and reap it before cleanup; gate and unrelated recording remain active.

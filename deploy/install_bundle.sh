@@ -8,6 +8,7 @@ case "$mode" in --check|--install) ;; *) echo 'Usage: sh deploy/install_bundle.s
 sha256sum -c SHA256SUMS
 [ -f instrument_app ] && [ -f luckfox_mux_adapter.so ] && [ -f deploy/RkLunch.sh ]
 [ -f deploy/button_inputs.sh ] && [ -f deploy/S79buttons ] && [ -f deploy/wpa_supplicant.default.conf ]
+if [ -f deploy/light_pwm.sh ]; then sh -n deploy/light_pwm.sh; fi
 [ "$(find sounds -name '*.wav' -type f | wc -l)" -eq 20 ]
 if [ "$mode" = --check ]; then
     echo 'CHECK_OK: bundle integrity only; no installation or service restart.'
@@ -50,6 +51,7 @@ chmod 600 "$record/config-before.json"
 cp SHA256SUMS "$record/package-SHA256SUMS"
 printf 'instrument_app opt/instrument/bin/instrument_app\nluckfox_mux_adapter.so opt/instrument/bin/luckfox_mux_adapter.so\ndeploy/RkLunch.sh RkLunch.sh\ndeploy/S80instrument oem/usr/etc/init.d/S80instrument\nVERSION opt/instrument/installed-version\nBUILD.txt opt/instrument/installed-build.txt\n' >"$record/install-map.txt"
 printf 'deploy/button_inputs.sh opt/instrument/bin/button_inputs.sh\ndeploy/S79buttons oem/usr/etc/init.d/S79buttons\n' >>"$record/install-map.txt"
+if [ -f deploy/light_pwm.sh ]; then printf 'deploy/light_pwm.sh opt/instrument/bin/light_pwm.sh\n' >>"$record/install-map.txt"; fi
 # Initialize factory Wi-Fi only. Existing real networks are preserved.
 printf 'deploy/wpa_supplicant.default.conf opt/instrument/defaults/wpa_supplicant.conf\n' >>"$record/install-map.txt"
 if [ ! -f /userdata/wpa_supplicant.conf ]; then

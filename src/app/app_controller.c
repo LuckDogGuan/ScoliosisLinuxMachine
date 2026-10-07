@@ -6,7 +6,10 @@
 #include <signal.h>
 #include <syslog.h>
 int legacy_run(Config config);
+int light_test_main(int argc, char **argv);
 int main(int argc, char **argv) {
+    if (argc >= 2 && !strcmp(argv[1], "--light-test"))
+        return light_test_main(argc - 2, argv + 2);
     if (argc == 2 && !strcmp(argv[1], "--version")) {
         puts(INSTRUMENT_VERSION);
         return 0;

@@ -100,4 +100,4 @@ UDP `37020` 收到合法 `discover` 后，单播 `here`（版本 2、原样 nonc
 
 ## WSL2 版本归档
 
-源码修改和 Git 写操作均在本 WSL2 工程执行。当前版本包在 `image/v3.1.0-20261001/`，包括程序、关键帧库、新 volume_test 和全部当前声音、配置样例、启动脚本及 SHA-256；对应 Git 标签 `instrument-v3.1.0-20261001`。改造前源码与板端自报 0.0.1 的备份在 `image/baseline-20261001/`。以后通过 `scripts/package_image.sh` 创建新的版本目录。进度见 `CHANGELOG.md`，版本使用与回退见 `image/README.md`。
+源码修改和 Git 写操作均在本 WSL2 工程执行。当前业务版本为3.3.1，正式包统一在 `releases/<版本>/`；历史3.1.0完整包在 `releases/3.1.0/payload/`，包括程序、关键帧库、新 volume_test 和全部当前声音、配置样例、启动脚本及 SHA-256；对应 Git 标签 `instrument-v3.1.0-20261001`。改造前源码与板端自报 0.0.1 的备份在 `image/baseline-20261001/`。以后通过 `sh scripts/package_image.sh 3.3.1` 和 `bash scripts/package_bundle.sh 3.3.1` 创建完整新版本，已存在版本禁止覆盖。灯光调试见 `docs/light-test.md`。进度见 `CHANGELOG.md`，版本使用与回退见 `image/README.md`。
