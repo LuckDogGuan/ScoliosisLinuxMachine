@@ -9,7 +9,7 @@
 
 #include <stddef.h>
 
-#define INSTRUMENT_VERSION "3.3.1"
+#define INSTRUMENT_VERSION "3.3.2"
 #ifndef INSTRUMENT_ROOT
 #define INSTRUMENT_ROOT "/opt/instrument"
 #endif
@@ -79,6 +79,8 @@ int discover_poll(Config *config);
 int battery_present(void);
 int button_capture_pressed(void);
 void light_update(int paired);
+int light_status_tick(int pairing, long long now);
+void light_status_close(void);
 int run_command(char *const argv[]);
 
 #endif

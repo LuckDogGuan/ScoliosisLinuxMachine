@@ -205,3 +205,66 @@ cleanup:
     fflush(stdout); close(lock);
     return result ? result : stopped ? 128+stopped : 0;
 }
+
+/* Business indication shares the diagnostic PWM/GPIO helpers and exclusive lock.
+ * Normal=steady; the actual open pairing window=breathing. No board work LED. */
+static struct {
+    int lock, ground, pwm, overlay, mode;
+    long last_duty;
+    long long changed, next, retry;
+    char chip[256];
+} status_light = {.lock=-1, .mode=-1, .last_duty=-1};
+void light_status_close(void) {
+    char path[512];
+    if (status_light.pwm) {
+        (void)pwm_write(status_light.chip,"duty_cycle",0);
+        (void)pwm_write(status_light.chip,"enable",0);
+        snprintf(path,sizeof(path),"%s/unexport",status_light.chip);
+        (void)put(path,"0");
+    }
+    if (status_light.overlay) (void)overlay("--disable");
+    if (status_light.ground) {
+        (void)gpio_write(32,"value","0");
+        (void)gpio_control(32,"unexport");
+    }
+    if (status_light.lock>=0) close(status_light.lock);
+    status_light.lock=-1; status_light.pwm=status_light.overlay=status_light.ground=0;
+    status_light.mode=-1; status_light.last_duty=-1;
+}
+int light_status_tick(int pairing, long long now) {
+    if (getenv("INSTRUMENT_HOST_TEST")) return 0;
+    if (status_light.lock<0) {
+        if (now<status_light.retry) return -1;
+        status_light.retry=now+5000;
+        status_light.lock=open("/tmp/instrument-light-test.lock",O_CREAT|O_RDWR|O_CLOEXEC|O_NOFOLLOW,0600);
+        if (status_light.lock<0 || flock(status_light.lock,LOCK_EX|LOCK_NB)) goto failed;
+        if (!gpio_free(1) || !gpio_free(32) || overlay("--enable")) goto failed;
+        status_light.overlay=1;
+        if (pwm_find(status_light.chip,sizeof(status_light.chip))) goto failed;
+        char path[512];
+        snprintf(path,sizeof(path),"%s/pwm0",status_light.chip);
+#ifndef LIGHT_TEST_HOST
+        if (!access(path,F_OK)) goto failed;
+#endif
+        snprintf(path,sizeof(path),"%s/export",status_light.chip);
+        if (put(path,"0")) goto failed;
+        status_light.pwm=1;
+        snprintf(path,sizeof(path),"%s/pwm0/polarity",status_light.chip);
+        if (pwm_write(status_light.chip,"period",PERIOD_NS) ||
+            pwm_write(status_light.chip,"duty_cycle",0) || pwm_write(status_light.chip,"enable",0) ||
+            put(path,"normal") || pwm_write(status_light.chip,"enable",1) ||
+            gpio_claim(32,&status_light.ground,0)) goto failed;
+    }
+    if (status_light.mode!=pairing) {
+        status_light.mode=pairing; status_light.changed=now; status_light.next=now;
+    }
+    if (now<status_light.next) return 0;
+    status_light.next=now+STEP_MS;
+    long level=duty(pairing ? "breathe" : "on",(long)((now-status_light.changed)%BREATH_MS));
+    if (level!=status_light.last_duty && pwm_write(status_light.chip,"duty_cycle",level)) goto failed;
+    status_light.last_duty=level;
+    return 0;
+failed:
+    light_status_close();
+    return -1;
+}

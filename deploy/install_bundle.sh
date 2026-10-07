@@ -9,7 +9,9 @@ sha256sum -c SHA256SUMS
 [ -f instrument_app ] && [ -f luckfox_mux_adapter.so ] && [ -f deploy/RkLunch.sh ]
 [ -f deploy/button_inputs.sh ] && [ -f deploy/S79buttons ] && [ -f deploy/wpa_supplicant.default.conf ]
 if [ -f deploy/light_pwm.sh ]; then sh -n deploy/light_pwm.sh; fi
-[ "$(find sounds -name '*.wav' -type f | wc -l)" -eq 20 ]
+expected_sounds=20
+if [ -f sounds/pair_window_closed.wav ]; then expected_sounds=21; fi
+[ "$(find sounds -name '*.wav' -type f | wc -l)" -eq "$expected_sounds" ]
 if [ "$mode" = --check ]; then
     echo 'CHECK_OK: bundle integrity only; no installation or service restart.'
     exit 0

@@ -1,3 +1,11 @@
+# 3.3.2 - Pairing status indication (2026-10-07)
+
+- Normal center LED steady; actual open pairing window breathes through shared PWM2 helpers.
+- Physical middle long press toggles the unpaired window; deadline 45 seconds, clears stale candidate transaction and queues one exit announcement.
+- Pair success restores steady with existing success audio. Add spoken entry deadline and exit confirmation; audio playback unchanged.
+- Graceful service shutdown turns LED off and releases owned GPIO32/PWM/overlay; exclusive diagnostics require stopping business service.
+- Host regression covers physical key deadline/cancel/commit/expiry plus actual sysfs duty transitions; visual and acoustic acceptance remain pending.
+
 # 3.3.1 - Standalone light diagnostic (2026-10-07)
 
 - Add bounded --light-test before business initialization: center off/on/slow/fast/breathe and manual backlight.

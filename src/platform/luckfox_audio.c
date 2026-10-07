@@ -11,7 +11,7 @@ static const char *const sounds[] = {
     "capture_done", "uploaded", "saved_on_device", "storage_low", "capture_failed",
     "please_connect", "pair_success", "pair_failed", "wifi_connected",
     "wifi_disconnected", "pair_disconnected", "capture_start", "capture_short",
-    "capture_enabled", "capture_disabled", "wifi_recovering", "wifi_attention", "wifi_restored", "pair_window", "volume_test"
+    "capture_enabled", "capture_disabled", "wifi_recovering", "wifi_attention", "wifi_restored", "pair_window", "volume_test", "pair_window_closed"
 };
 static time_t last_played[sizeof(sounds) / sizeof(sounds[0])];
 

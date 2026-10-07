@@ -958,6 +958,11 @@ static void diagnostics_tick(Runtime *rt, uint64_t now) {
         (void)send(fd,&result,sizeof(result),MSG_NOSIGNAL); close(fd); _exit(0);
     }
 }
+static void close_pair_window(Runtime *rt, const char *reason) {
+    rt->pair_window=0; rt->candidate[0]=0; rt->txn_deadline=0;
+    queue_sound(rt,"pair_window_closed");
+    instrument_trace("pair_window_closed","","",rt->boot,reason);
+}
 int runtime_run(Config *config) {
     Runtime rt = {.config = config, .audio_volume = config->volume, .keys = -1, .release_required = 1, .rssi = -100,
                   .free_mb = -1, .total_mb = -1, .available_mb = -1, .memory_mb = -1};
@@ -1000,6 +1005,7 @@ int runtime_run(Config *config) {
     syslog(LOG_INFO, "V3 coordinator boot=%s, gate disabled, buttons gpio3/gpio4/gpio0", rt.boot);
     while (active) {
         uint64_t now = v3_now();
+        if (rt.pair_window && now >= rt.pair_window) close_pair_window(&rt,"timeout");
         int previous_keys = rt.keys;
         (void)buttons_snapshot((uint32_t)now, &rt.keys);
         if (rt.keys != previous_keys) {
@@ -1023,8 +1029,12 @@ int runtime_run(Config *config) {
                 const char *action = "ignored";
                 if (rt.paired) action = request_unpair(&rt) ? "unpair_failed" : "unpair";
                 else if (!rt.revoking && !rt.record.pid && !rt.completion_pending) {
-                    rt.pair_window = now + 60000; rt.candidate[0] = 0; queue_sound(&rt, "pair_window");
-                    action = "pair_window";
+                    if (rt.pair_window > now) {
+                        close_pair_window(&rt,"manual"); action="pair_window_closed";
+                    } else {
+                        rt.pair_window = now + 45000; rt.candidate[0] = 0; queue_sound(&rt, "pair_window");
+                        action = "pair_window";
+                    }
                 }
                 instrument_trace("middle_long_press", rt.current_id, rt.gate_id, rt.boot, action);
             }
@@ -1045,6 +1055,13 @@ int runtime_run(Config *config) {
             WorkerResult retry = rt.completion; completed(&rt, &retry);
         }
         discard_messages(&rt); notifier_messages(&rt); upload_messages(&rt); audio_messages(&rt); receive_udp(&rt, now); maintenance(&rt, now);
+        int light_result=light_status_tick(rt.pair_window > now && !rt.paired && !rt.revoking,(long long)now);
+        static int previous_light_result=-2, previous_light_mode=-1;
+        int light_mode=rt.pair_window > now && !rt.paired && !rt.revoking;
+        if (light_result!=previous_light_result || light_mode!=previous_light_mode) {
+            instrument_trace("status_light","","",rt.boot,light_result ? "unavailable" : light_mode ? "breathe" : "steady");
+            previous_light_result=light_result; previous_light_mode=light_mode;
+        }
         /* Every child is bounded; reap send-then-exit races without blocking input. */
         while (waitpid(-1, NULL, WNOHANG) > 0) {}
         struct pollfd input = {.fd = rt.udp, .events = POLLIN};
@@ -1061,5 +1078,6 @@ int runtime_run(Config *config) {
     if (rt.maintenance.pid) (void)waitpid(rt.maintenance.pid, NULL, 0);
     if (rt.discard.pid) (void)waitpid(rt.discard.pid, NULL, 0);
     if (rt.audio.pid) { (void)waitpid(rt.audio.pid, NULL, 0); (void)audio_set_volume(config->volume); }
+    light_status_close();
     close(rt.udp); return 0;
 }
