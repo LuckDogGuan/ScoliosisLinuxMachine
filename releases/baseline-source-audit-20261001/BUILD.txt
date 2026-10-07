@@ -1,0 +1,5 @@
+archive_kind=historical-uncommitted-source-audit
+release_tag=instrument-baseline-source-audit-20261001
+origin=Windows read-only analysis snapshots, 2026-10-01
+firmware_release_version=none
+rebuild_and_hardware_acceptance=not_claimed
