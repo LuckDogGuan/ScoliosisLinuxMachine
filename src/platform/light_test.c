@@ -347,6 +347,8 @@ int platform_backlight_set(int on) {
     return platform_backlight_percent(on ? backlight_brightness : 0);
 }
 void light_status_close(void) {
+    /* PWM removal does not restore C7 mux; use the verified GPIO-off path first. */
+    if (backlight_pwm) (void)platform_backlight_percent(0);
     char path[512];
     if (backlight_owned) {
         (void)gpio_write(55, "value", "0");
