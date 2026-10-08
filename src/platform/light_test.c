@@ -288,6 +288,22 @@ static void backlight_pwm_close(void) {
 void platform_backlight_configure(int percent) {
     if (percent >= 0 && percent <= 100) backlight_brightness = percent;
 }
+static int backlight_gpio_mux(void) {
+#ifdef LIGHT_TEST_HOST
+    return 0;
+#else
+    /* RV1106 GPIO1_C7: official pinctrl 4-bit mux at IOC + 0x14, bits 12..15.
+       Removing the PWM11 overlay leaves function 3 latched on this kernel. */
+    static const char setup[] =
+        "set -eu\n"
+        "before=$(devmem 0xff538014 32)\n"
+        "devmem 0xff538014 32 0xF0000000\n"
+        "after=$(devmem 0xff538014 32)\n"
+        "[ $((after)) -eq $((before & 0xffff0fff)) ]\n";
+    char *args[] = {"sh", "-c", (char *)setup, NULL};
+    return run_command(args);
+#endif
+}
 int platform_backlight_percent(int percent) {
     if (percent < 0 || percent > 100) return -1;
     if (getenv("INSTRUMENT_HOST_TEST")) return 0;
@@ -321,6 +337,7 @@ int platform_backlight_percent(int percent) {
         if (pwm_write(backlight_chip,"duty_cycle",PERIOD_NS * (100-percent) / 100)) return -1;
     } else {
         if (!backlight_owned && gpio_claim(55,&backlight_owned,0)) return -1;
+        if (backlight_gpio_mux()) return -1;
         if (gpio_write(55,"value",percent ? "1" : "0")) return -1;
     }
     backlight_level = percent;
