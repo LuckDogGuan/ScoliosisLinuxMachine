@@ -41,10 +41,12 @@ int main(void) {
     assert(platform_backlight_percent(-1)==-1 && platform_backlight_percent(101)==-1);
     for(int percent=0;percent<=100;percent++) {
         assert(platform_backlight_percent(percent)==0);
-        if(percent>0) {
+        if(percent>0 && percent<100) {
             char p[512];snprintf(p,sizeof(p),"%s/class/pwm/pwmchip1/pwm0/duty_cycle",sysroot());
             FILE *f=fopen(p,"r");long duty=-1;assert(f && fscanf(f,"%ld",&duty)==1);fclose(f);
-            assert(duty==1000000L*percent/100);
+            assert(duty==1000000L*(100-percent)/100);
+        } else {
+            assert(read_level()==(percent==100));
         }
     }
     platform_backlight_configure(37); assert(platform_backlight_set(1)==0);

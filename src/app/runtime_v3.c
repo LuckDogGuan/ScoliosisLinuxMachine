@@ -76,7 +76,7 @@ typedef struct {
     char last_nonce[ID_SIZE], last_op[64], last_reply[PACKET_SIZE];
     long free_mb, total_mb, available_mb, memory_mb;
     int rssi, gateway_failures, wifi_seen;
-    uint64_t startup_at, diagnostics_lease, diagnostics_next;
+    uint64_t startup_at, diagnostics_lease, diagnostics_next, last_host_contact;
     char diagnostics_id[ID_SIZE];
     int backlight_brightness, diagnostics_brightness;
     Worker diagnostics;
@@ -779,7 +779,10 @@ static void receive_udp(Runtime *rt, uint64_t now) {
         if (!reply) { cJSON_Delete(request); continue; }
         int mutation = strcmp(op, "hello_query") && strcmp(op, "pending_query") && strcmp(op, "paired_discover");
         int success = 0;
-        if (!strcmp(op, "hello_query")) hello_reply(rt, reply, now);
+        if (!strcmp(op, "hello_query")) {
+            if (rt->paired && !strcmp(rt->host,str(request,"host_id")) && !strcmp(rt->peer_ip,address)) rt->last_host_contact=now;
+            hello_reply(rt, reply, now);
+        }
         else if (!strcmp(op, "paired_discover") && rt->paired && !rt->revoking &&
                  !strcmp(rt->host, str(request, "host_id")) && !strcmp(rt->txn, str(request, "txn_id"))) {
             success = 1; cJSON_AddStringToObject(reply, "txn_id", rt->txn);
@@ -1079,13 +1082,15 @@ int runtime_run(Config *config) {
             WorkerResult retry = rt.completion; completed(&rt, &retry);
         }
         discard_messages(&rt); notifier_messages(&rt); upload_messages(&rt); audio_messages(&rt); receive_udp(&rt, now); maintenance(&rt, now);
-        int light_result=light_status_tick(rt.pair_window > now && !rt.paired && !rt.revoking,(long long)now);
+        int connected=rt.paired && rt.last_host_contact && now-rt.last_host_contact<15000;
+        int light_mode=light_status_mode(rt.pair_window > now && !rt.paired && !rt.revoking,
+            rt.paired,connected,rt.keys<0 || !strcmp(rt.wifi_state,"needs_attention"),0);
+        int light_result=light_status_tick(light_mode,(long long)now);
         if (now < rt.diagnostics_lease) (void)platform_backlight_percent(rt.diagnostics_brightness);
         else (void)backlight_tick(now, rt.keys, rt.gate && now < rt.lease && !rt.revoking);
         static int previous_light_result=-2, previous_light_mode=-1;
-        int light_mode=rt.pair_window > now && !rt.paired && !rt.revoking;
         if (light_result!=previous_light_result || light_mode!=previous_light_mode) {
-            instrument_trace("status_light","","",rt.boot,light_result ? "unavailable" : light_mode ? "breathe" : "steady");
+            instrument_trace("status_light","","",rt.boot,light_result ? "unavailable" : light_mode==LIGHT_PAIRING ? "breathe" : light_mode==LIGHT_DISCONNECTED ? "slow" : light_mode==LIGHT_FAULT ? "fast" : "steady");
             previous_light_result=light_result; previous_light_mode=light_mode;
         }
         /* Every child is bounded; reap send-then-exit races without blocking input. */

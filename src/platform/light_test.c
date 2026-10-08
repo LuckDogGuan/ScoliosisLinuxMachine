@@ -277,7 +277,7 @@ static int backlight_brightness = 100;
 static char backlight_chip[256];
 static void backlight_pwm_close(void) {
     if (backlight_pwm) {
-        (void)pwm_write(backlight_chip,"duty_cycle",0);
+        (void)pwm_write(backlight_chip,"duty_cycle",PERIOD_NS);
         (void)pwm_write(backlight_chip,"enable",0);
         char path[512]; snprintf(path,sizeof(path),"%s/unexport",backlight_chip);
         (void)put(path,"0"); backlight_pwm=0;
@@ -293,6 +293,7 @@ int platform_backlight_percent(int percent) {
     if (getenv("INSTRUMENT_HOST_TEST")) return 0;
     if (status_light.lock < 0) return -1;
     if (backlight_level == percent) return 0;
+    if ((percent == 0 || percent == 100) && backlight_pwm) backlight_pwm_close();
     if (percent > 0 && percent < 100 && !backlight_pwm) {
         if (backlight_owned) {
             if (gpio_write(55,"value","0") || gpio_control(55,"unexport")) return -1;
@@ -312,11 +313,12 @@ int platform_backlight_percent(int percent) {
         if (put(path,"0")) { backlight_pwm_close(); return -1; }
         backlight_pwm = 1;
         if (pwm_write(backlight_chip,"period",PERIOD_NS) ||
-            pwm_write(backlight_chip,"duty_cycle",0) ||
+            pwm_write(backlight_chip,"duty_cycle",PERIOD_NS * (100-percent) / 100) ||
             pwm_write(backlight_chip,"enable",1)) { backlight_pwm_close(); return -1; }
     }
     if (backlight_pwm) {
-        if (pwm_write(backlight_chip,"duty_cycle",PERIOD_NS * percent / 100)) return -1;
+        /* This board PWM duty runs opposite to its GPIO full-on level. */
+        if (pwm_write(backlight_chip,"duty_cycle",PERIOD_NS * (100-percent) / 100)) return -1;
     } else {
         if (!backlight_owned && gpio_claim(55,&backlight_owned,0)) return -1;
         if (gpio_write(55,"value",percent ? "1" : "0")) return -1;
@@ -350,7 +352,14 @@ void light_status_close(void) {
     status_light.lock=-1; status_light.pwm=status_light.overlay=status_light.ground=0;
     status_light.mode=-1; status_light.last_duty=-1;
 }
-int light_status_tick(int pairing, long long now) {
+int light_status_mode(int pairing, int paired, int connected, int fault, int low_battery) {
+    if (fault) return LIGHT_FAULT;
+    if (low_battery) return LIGHT_LOW_BATTERY; /* reserved until calibrated ADC is available */
+    if (pairing) return LIGHT_PAIRING;
+    if (!paired || !connected) return LIGHT_DISCONNECTED;
+    return LIGHT_CONNECTED;
+}
+int light_status_tick(int mode, long long now) {
     if (getenv("INSTRUMENT_HOST_TEST")) return 0;
     if (status_light.lock<0) {
         if (now<status_light.retry) return -1;
@@ -374,12 +383,19 @@ int light_status_tick(int pairing, long long now) {
             put(path,"normal") || pwm_write(status_light.chip,"enable",1) ||
             gpio_claim(32,&status_light.ground,0)) goto failed;
     }
-    if (status_light.mode!=pairing) {
-        status_light.mode=pairing; status_light.changed=now; status_light.next=now;
+    if (status_light.mode!=mode) {
+        status_light.mode=mode; status_light.changed=now; status_light.next=now;
     }
     if (now<status_light.next) return 0;
     status_light.next=now+STEP_MS;
-    long level=duty(pairing ? "breathe" : "on",(long)((now-status_light.changed)%BREATH_MS));
+    long elapsed=(long)(now-status_light.changed);
+    const char *name=mode==LIGHT_PAIRING ? "breathe" : mode==LIGHT_DISCONNECTED ? "slow" :
+        mode==LIGHT_FAULT ? "fast" : mode==LIGHT_OFF ? "off" : "on";
+    long level=duty(name,elapsed);
+    if (mode==LIGHT_LOW_BATTERY) {
+        long phase=elapsed%2000;
+        level=(phase<125 || (phase>=250 && phase<375)) ? PERIOD_NS : 0;
+    }
     if (level!=status_light.last_duty && pwm_write(status_light.chip,"duty_cycle",level)) goto failed;
     status_light.last_duty=level;
     return 0;

@@ -9,7 +9,7 @@
 
 #include <stddef.h>
 
-#define INSTRUMENT_VERSION "3.3.4"
+#define INSTRUMENT_VERSION "3.3.5"
 #ifndef INSTRUMENT_ROOT
 #define INSTRUMENT_ROOT "/opt/instrument"
 #endif
@@ -79,7 +79,9 @@ int discover_poll(Config *config);
 int battery_present(void);
 int button_capture_pressed(void);
 void light_update(int paired);
-int light_status_tick(int pairing, long long now);
+enum { LIGHT_CONNECTED, LIGHT_PAIRING, LIGHT_DISCONNECTED, LIGHT_FAULT, LIGHT_OFF, LIGHT_LOW_BATTERY };
+int light_status_mode(int pairing, int paired, int connected, int fault, int low_battery);
+int light_status_tick(int mode, long long now);
 void light_status_close(void);
 int run_command(char *const argv[]);
 
