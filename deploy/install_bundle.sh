@@ -10,7 +10,8 @@ sha256sum -c SHA256SUMS
 [ -f deploy/wpa_supplicant.default.conf ]
 if [ -f deploy/light_pwm.sh ]; then sh -n deploy/light_pwm.sh; fi
 expected_sounds=20
-if [ -f sounds/pair_window_closed.wav ]; then expected_sounds=21; fi
+if [ -f sounds/pair_window_closed.wav ]; then expected_sounds=$((expected_sounds + 1)); fi
+if [ -f sounds/boot_ready.wav ]; then expected_sounds=$((expected_sounds + 1)); fi
 [ "$(find sounds -name '*.wav' -type f | wc -l)" -eq "$expected_sounds" ]
 if [ "$mode" = --check ]; then
     echo 'CHECK_OK: bundle integrity only; no installation or service restart.'
