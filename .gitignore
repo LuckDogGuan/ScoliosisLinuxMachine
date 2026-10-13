@@ -30,3 +30,9 @@
 /releases/*/payload/
 /releases/*/*.tmp
 /releases/*/.payload-*
+
+# Rebuildable hardware-probe executables; source and acceptance evidence are tracked.
+/tools/adc-test-20261009/adc_probe
+/tools/adc-test-20261009/adc_probe_host
+/tools/deploy-check-20261009/hello*
+!/tools/deploy-check-20261009/hello.c

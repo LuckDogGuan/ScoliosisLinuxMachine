@@ -89,6 +89,7 @@ typedef struct {
     char maintenance_type;
     char upload_id[ID_SIZE];
     char sounds[8][32]; unsigned sound_in, sound_out;
+    char speech_id[ID_SIZE]; uint64_t speech_lease, speech_resume;
 } Runtime;
 static int request_unpair(Runtime *rt);
 static int begin_audio(Runtime *rt, const cJSON *request, int test);
@@ -127,6 +128,7 @@ static int local_unpair(Runtime *rt) {
     int revoking = rt->revoking; rt->revoking = 0;
     if (save_pair(rt)) { rt->revoking = revoking; COPY(rt->host, previous); rt->unpair[0] = 0; return -1; }
     rt->paired = 0; rt->revoking = 0;
+    rt->speech_lease=0; rt->speech_id[0]=0; rt->speech_resume=v3_now()+600;
     disable_gate(rt);
     rt->candidate[0] = 0;
     rt->pair_window = 0;
@@ -367,13 +369,14 @@ static void completed(Runtime *rt, const WorkerResult *result) {
     cJSON_Delete(rt->last_completed);
     rt->last_completed=cJSON_Duplicate(event,1);
     instrument_trace("capture_completed",rt->current_id,rt->current_gate,rt->boot,str(event,"result"));
+    /* Queue before publishing completion so the PC cannot acquire speech first. */
+    queue_sound(rt, result->result ? "capture_failed" : result->duration < 3000 ? "capture_short" : "capture_done");
     immediate_completion(rt, event);
     cJSON_Delete(event);
     rt->completion_pending = 0; rt->completion_event[0] = 0;
     rt->recording = 0; rt->current_id[0] = 0; rt->started_at = 0;
     rt->recording_mono=rt->stopped_mono=0;
     COPY(rt->phase, rt->capture_id[0] ? "prepared" : "idle");
-    queue_sound(rt, result->result ? "capture_failed" : result->duration < 3000 ? "capture_short" : "capture_done");
     rt->last_maintenance = 0;
     if (rt->revoking) (void)local_unpair(rt);
     cJSON *empty = cJSON_CreateObject();
@@ -490,7 +493,11 @@ static void worker_watchdog(Runtime *rt,uint64_t now) {
 
 static void maintenance(Runtime *rt, uint64_t now) {
     /* Prompt playback never queues behind network/storage maintenance. */
-    if (!rt->audio.pid && rt->sound_in!=rt->sound_out && strcmp(rt->phase,"starting")) {
+    if (rt->speech_lease && now >= rt->speech_lease) {
+        rt->speech_lease=0; rt->speech_id[0]=0; rt->speech_resume=now+600;
+        instrument_trace("speech_expired","","",rt->boot,"");
+    }
+    if (!rt->audio.pid && now >= rt->speech_lease && now >= rt->speech_resume && rt->sound_in!=rt->sound_out && strcmp(rt->phase,"starting")) {
         char sound[32];COPY(sound,rt->sounds[rt->sound_out%8]);
         int fd;int branch=make_worker(&rt->audio,&fd);
         if (!branch) {
@@ -675,7 +682,7 @@ static int begin_audio(Runtime *rt, const cJSON *request, int test) {
     int volume = (int)num(request, "volume");
     const char *operation = str(request, "operation_id");
     if (!safe_id(operation) || volume < 0 || volume > 30 || num(request, "volume") != volume ||
-        rt->gate || rt->record.pid || rt->completion_pending || rt->audio.pid ||
+        rt->gate || rt->record.pid || rt->completion_pending || rt->audio.pid || v3_now()<rt->speech_lease ||
         (rt->maintenance.pid && rt->maintenance_type == 'A') || rt->sound_in != rt->sound_out) return -1;
     if (!strcmp(operation, rt->audio_id)) return 0;
     int fd; int branch = make_worker(&rt->audio, &fd);
@@ -733,12 +740,13 @@ static cJSON *base_reply(Runtime *rt, const cJSON *request) {
 static void hello_reply(Runtime *rt, cJSON *reply, uint64_t now) {
     cJSON_ReplaceItemInObjectCaseSensitive(reply, "ok", cJSON_CreateTrue());
     cJSON *capabilities = cJSON_AddArrayToObject(reply, "capabilities");
-    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard", "backlight_brightness"};
+    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard", "backlight_brightness", "speech_focus"};
     for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); i++) cJSON_AddItemToArray(capabilities, cJSON_CreateString(names[i]));
     cJSON_AddStringToObject(reply, "paired_host_id", rt->revoking ? "" : rt->host);
     cJSON_AddNumberToObject(reply, "volume", rt->audio_volume);
     cJSON_AddNumberToObject(reply, "saved_volume", rt->config->volume);
-    cJSON_AddBoolToObject(reply, "audio_busy", rt->audio.pid || (rt->maintenance.pid && rt->maintenance_type == 'A') || rt->sound_in != rt->sound_out);
+    cJSON_AddBoolToObject(reply,"speech_focus_active", now < rt->speech_lease);
+    cJSON_AddBoolToObject(reply, "audio_busy", now < rt->speech_lease || rt->audio.pid || (rt->maintenance.pid && rt->maintenance_type == 'A') || rt->sound_in != rt->sound_out);
     cJSON_AddStringToObject(reply, "audio_operation_id", rt->audio_id);
     cJSON_AddNumberToObject(reply, "audio_operation_result", rt->audio_result);
     cJSON_AddStringToObject(reply, "uploading_capture_id", rt->upload_id);
@@ -853,6 +861,26 @@ static int begin_discard(Runtime *rt, const cJSON *request, cJSON *reply) {
     }
     cJSON_AddStringToObject(reply,"error","discard_pending");
     return 0;
+}
+static int speech_focus(Runtime *rt, const cJSON *request, uint64_t now) {
+    const char *id=str(request,"speech_id"), *action=str(request,"action");
+    int ttl=(int)num(request,"ttl_ms");
+    if (!safe_id(id)) return 0;
+    if (!strcmp(action,"release")) {
+        if (strcmp(id,rt->speech_id)) return 0;
+        rt->speech_lease=0; rt->speech_id[0]=0; rt->speech_resume=now+600;
+        instrument_trace("speech_released","","",rt->boot,id); return 1;
+    }
+    if (ttl<=0 || ttl>6000 || num(request,"ttl_ms")!=ttl) return 0;
+    if (!strcmp(action,"renew")) {
+        if (now>=rt->speech_lease || strcmp(id,rt->speech_id)) return 0;
+        rt->speech_lease=now+(unsigned)ttl; return 1;
+    }
+    if (strcmp(action,"acquire")) return 0;
+    if (now<rt->speech_lease) return !strcmp(id,rt->speech_id);
+    if (rt->audio.pid || (rt->maintenance.pid && rt->maintenance_type=='A') || rt->sound_in!=rt->sound_out) return 0;
+    COPY(rt->speech_id,id); rt->speech_lease=now+(unsigned)ttl;
+    instrument_trace("speech_acquired","","",rt->boot,id); return 1;
 }
 static void receive_udp(Runtime *rt, uint64_t now) {
     for (int packets = 0; packets < 16; packets++) {
@@ -995,6 +1023,10 @@ static void receive_udp(Runtime *rt, uint64_t now) {
         } else if (!strcmp(op, "unpair")) {
             success = !request_unpair(rt);
             cJSON_AddStringToObject(reply, "event_id", rt->unpair);
+        } else if (!strcmp(op,"speech_focus")) {
+            success=speech_focus(rt,request,now);
+            cJSON_AddStringToObject(reply,"speech_id",str(request,"speech_id"));
+            cJSON_AddNumberToObject(reply,"remaining_ms",rt->speech_lease>now ? (double)(rt->speech_lease-now) : 0);
         } else if (!strcmp(op, "capture_disable")) {
             if (!strcmp(rt->gate_id, str(request, "gate_id"))) { disable_gate(rt); success = 1; }
             cJSON_AddStringToObject(reply, "phase", rt->phase);

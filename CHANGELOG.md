@@ -117,3 +117,7 @@ C `make check-host`、42 项协议检查及 ARM/uClibc 编译通过；Flutter 45
 - 最终包 v3.3.0-20261004-minmax-volume20-bundle2；ARM/uClibc 编译、配置校验、包测试通过。
 - 实板 41eda5f2c5b00de1 完成 ADB 首装、停止 PC ADB 后的独立路由器 SSH 更新和重启恢复，配置/ALSA 音量 20；另一台序列号不匹配被只读拒绝。
 - 证据：Windows 调试/记录/adb-ssh-update-20261004/部署与独立SSH升级验收.md；相机传感器仍未识别，不属于本次部署通道验收通过范围。
+
+## 3.3.10 — 2026-10-13
+
+22 prompts use user-selected Microsoft Kangkang male voice (Yunxi service returned HTTP 403). speech_focus acquire/renew/release uses a 6-second lease and 600ms handover gap; capture completion queues its prompt before notifying the PC. Capture/upload leases remain independent.

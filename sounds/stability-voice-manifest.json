@@ -1,182 +1,206 @@
 {
-  "voice": "Microsoft Huihui Desktop",
-  "rate": 0,
+  "voice": "Microsoft Kangkang",
+  "rate": -1,
+  "generator": "PowerShell 7 System.Speech",
+  "choice": "user-approved replacement for unavailable Yunxi, 2026-10-13",
   "files": [
     {
       "file": "boot_ready.wav",
-      "seconds": 1.97,
+      "phrase": "设备已启动",
+      "seconds": 2.18,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "4f2bf66750e5fd182a986a400a9971e2d909fec9b7f74d7b805f38f8958cdeff"
-    },
-    {
-      "file": "capture_disabled.wav",
-      "seconds": 2.075,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "e44bf64b01a099fe0e5d6d307461a9213e7e682f72268b71b7899c430032b90c"
-    },
-    {
-      "file": "capture_done.wav",
-      "seconds": 1.805,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "7bd0ca4c07d16cb8f04adb95803b1555da5f078c96e0305d7069f84b3d0a947c"
+      "sha256": "18acc856ca66b9bb44984954ce784018b221c59bc1b1d68f4de5cf1f01b960ca"
     },
     {
       "file": "capture_enabled.wav",
-      "seconds": 1.995,
+      "phrase": "拍摄已启用",
+      "seconds": 2.195,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "5a4ab63fc35a836dfcd6a5cd609e4f07cfa1704734671a267ce857048fcb5e77"
+      "sha256": "518991bdeb25271397909dd628abb56e6d79a6126eee1b444816212e04ffa809"
     },
     {
-      "file": "capture_failed.wav",
-      "seconds": 2.98,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "6ff8951e718a82264dc00c5e396a61fb4c12b6ac0cc7775308e37cc1b3722e80"
-    },
-    {
-      "file": "capture_short.wav",
-      "seconds": 3.025,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "3977288ccfff7fc921255781b726076a292d3e16f989aa609145f6095b15d402"
-    },
-    {
-      "file": "capture_start.wav",
-      "seconds": 1.765,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "1dc75cf8b6f3227894416ae87d87ed509697684e2afa5ffe2976e6a2f73a973a"
-    },
-    {
-      "file": "pair_disconnected.wav",
-      "seconds": 2.485,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "e37ea96307e0f8c4471df0584f63d004db7283fde73d4fd4e94324e7c6dc43e6"
-    },
-    {
-      "file": "pair_failed.wav",
-      "seconds": 1.805,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "70f8852b3ddb95dff4f4ce7919a592bfb280c2fe446bed17afde75f0fcb254bc"
-    },
-    {
-      "file": "pair_success.wav",
-      "seconds": 1.85,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "0c9e618a618d3c0c8f88c4139ef98ca4b74e4b6f3fe946e5741ee9ad81a106e2"
-    },
-    {
-      "file": "pair_window.wav",
-      "seconds": 2.385,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "0201014ca76147140e186b05faf03ac95b818c8b51bc384136ce0651405ff084"
-    },
-    {
-      "file": "pair_window_closed.wav",
-      "seconds": 4.48,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "ac53ee59be6aa5b6f83799d9b66ba6b6ab802fb92046d48771fa46447fac5315"
-    },
-    {
-      "file": "please_connect.wav",
-      "seconds": 3.0,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "e21ecb01b0348807f3dd920c280178e87cd21802c786db5f9b5e4d891b14a5a2"
-    },
-    {
-      "file": "saved_on_device.wav",
-      "seconds": 2.735,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "c08541807fc4700464d77d4f3d27e603a953c23215145e885bcdce290cbf5fdd"
-    },
-    {
-      "file": "storage_low.wav",
-      "seconds": 2.335,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "ea9c9b0f7b569a4c2fe710583d4550668211f809e6dc3a9a073594a43148efdb"
-    },
-    {
-      "file": "uploaded.wav",
+      "file": "capture_disabled.wav",
+      "phrase": "拍摄已停止",
       "seconds": 2.245,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "d06de8634a00672fbed2ae04cfe7d602d6a6ea2f78f63aeacf599ddcfddb9894"
+      "sha256": "570c857747438253d6da7a07f454c4b6f857ac1b12f3df08d7614d15e723ca33"
     },
     {
-      "file": "volume_test.wav",
-      "seconds": 2.265,
+      "file": "capture_start.wav",
+      "phrase": "开始拍摄",
+      "seconds": 1.92,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "63dcd84d0c7529898a4a9387cf5fff91e0db0fc82763db05281c72247247c9fd"
+      "sha256": "f287ae374f51f51c06e881820b8df73c549fcea403ed35da6ff20ed94f045ca6"
     },
     {
-      "file": "wifi_attention.wav",
-      "seconds": 3.645,
+      "file": "capture_done.wav",
+      "phrase": "拍摄完成",
+      "seconds": 1.945,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "c9dc23351de857a142a75811e8a7ab152dcceae05c051230e409ac00f781b8e7"
+      "sha256": "f2decbcd8c78c17792df67bb48014012e666ba426f12fe61e15437b41be6d7fa"
+    },
+    {
+      "file": "capture_short.wav",
+      "phrase": "录像过短，请重拍",
+      "seconds": 3.015,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "79c363c1d537d36eb5c7e30aedb3d949dc828e3824bdb726331065e7b563a5b7"
+    },
+    {
+      "file": "capture_failed.wav",
+      "phrase": "拍摄失败，请重拍",
+      "seconds": 2.95,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "e9847a5f6fdd6a48cf5d9594c3041205313af270eace00f100063981b048612e"
+    },
+    {
+      "file": "pair_window.wav",
+      "phrase": "已进入配对模式",
+      "seconds": 2.57,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "bd8ed14a082c2b08c0234bbfdf7bea8b0e4e4e75c9187fde3ab075ff325baaae"
+    },
+    {
+      "file": "pair_window_closed.wav",
+      "phrase": "配对模式已关闭，已恢复正常模式",
+      "seconds": 4.525,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "6933cf6bf1d3ffbf77cdc78ff1e3aa6743e7c4d178d90f69daff494bb766fc88"
+    },
+    {
+      "file": "pair_success.wav",
+      "phrase": "连接成功",
+      "seconds": 1.895,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "fcf548462dbe949dfb79a4b9d4c7ab7bdbcf2192f290c77030a6b4ec8a38ec10"
+    },
+    {
+      "file": "pair_failed.wav",
+      "phrase": "连接失败",
+      "seconds": 1.82,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "c1c360af3af86687dcbbab42b7f492a35fd44d23c4f95ef6af6de0d9affc4fc4"
+    },
+    {
+      "file": "pair_disconnected.wav",
+      "phrase": "设备已断开连接",
+      "seconds": 2.63,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "434aac208176522d37507be78ccecd7cf293793971dc78e45396e29888d3ad4d"
+    },
+    {
+      "file": "please_connect.wav",
+      "phrase": "请在电脑上连接设备",
+      "seconds": 3.065,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "2009dad29d6c8b62774a5689d5a8ea3d896bedd2c763f5b002eeaf355662ea06"
+    },
+    {
+      "file": "uploaded.wav",
+      "phrase": "视频已上传",
+      "seconds": 2.375,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "c12379bac8daa2391beabf07d288770601dd0128ec1fb40a6038424701c1c7dd"
+    },
+    {
+      "file": "saved_on_device.wav",
+      "phrase": "视频已保存在设备",
+      "seconds": 2.865,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "abe9cd3516c8c2f0fbca8d9129a0bf150a733273256fe17d023a347d4431352d"
+    },
+    {
+      "file": "storage_low.wav",
+      "phrase": "存储空间不足",
+      "seconds": 2.48,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "b721c02ff65daadfbd718ed112e50a8bab218c8412d473b1b27b44c3ef534dc8"
     },
     {
       "file": "wifi_connected.wav",
-      "seconds": 2.055,
+      "phrase": "网络已连接",
+      "seconds": 2.2,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "9ba152e1f85a2286102e9dd94e38ac8c9d4c2d03491295baf3e043c6088ea99c"
+      "sha256": "38409f203ba0c618fea6390a04637d9800fa3e469ec6dd05baf2386cb03980b8"
     },
     {
       "file": "wifi_disconnected.wav",
-      "seconds": 2.055,
+      "phrase": "网络已断开",
+      "seconds": 2.215,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "51fd45634f8f00ee60169354c8e0785d7749e3dc5579ff0deae3c4e1aa759636"
+      "sha256": "b9736eecb496b06e600f9c7c3db04534719615bc7036211318299dfa837cf9ed"
     },
     {
       "file": "wifi_recovering.wav",
-      "seconds": 2.055,
+      "phrase": "网络重连中",
+      "seconds": 2.24,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "f528d9ca211c02bcb3642d12b0af29b0f6633c38ae4e52bdfcd82d8c679d46be"
+      "sha256": "679da0ffc2f2aaee7c8ff051aa559ac580b7ca1fe871a82c5629a84f5e60f54b"
+    },
+    {
+      "file": "wifi_attention.wav",
+      "phrase": "网络异常，请检查路由器",
+      "seconds": 3.695,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "59f0638bdb846b716da138450629f0958286215716b216316f0646d96b8c87dd"
     },
     {
       "file": "wifi_restored.wav",
-      "seconds": 2.0,
+      "phrase": "网络已恢复",
+      "seconds": 2.21,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "c86770bfd1128c9920740e2ca0e88bd2befdbc3a21a01fe67bdb77fea378869e"
+      "sha256": "6bfcc12a06c20076766c7424d1323a9c807890d807cd20b017df423c02e00b85"
+    },
+    {
+      "file": "volume_test.wav",
+      "phrase": "设备音量测试",
+      "seconds": 2.33,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "133a773c3cbb2b4e81c382ebbd57510bd6994838aeee793bfeb00faeb8f3f956"
     }
   ]
 }
