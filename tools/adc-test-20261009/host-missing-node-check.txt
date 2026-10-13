@@ -1,0 +1,2 @@
+sample,scale_mV_per_count,raw0,voltage0_V,raw1,voltage1_V
+/sys/bus/iio/devices/iio:device0/in_voltage_scale: No such file or directory
