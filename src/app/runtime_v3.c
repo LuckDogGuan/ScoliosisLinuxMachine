@@ -1119,10 +1119,13 @@ int runtime_run(Config *config) {
     cJSON_Delete(pair);
     cJSON *interrupted = v3_read_json(STATE_DIR "/active-v3.json");
     if (interrupted && safe_id(str(interrupted, "capture_id"))) {
+        rt.camera_fault=1; /* Recorder death does not prove the camera daemon stopped. */
         COPY(rt.current_id, str(interrupted, "capture_id")); COPY(rt.current_gate, str(interrupted, "gate_id"));
         rt.started_at = num(interrupted, "started_at_ms") > 0 ? (uint64_t)num(interrupted, "started_at_ms") : 0;
         WorkerResult result = {.result = -1, .reason = 2, .ended_at = wall_ms()};
-        if (num(interrupted, "duration_ms") >= 0) {
+        if (cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(interrupted,"duration_ms")) &&
+            num(interrupted,"duration_ms")>=0 && num(interrupted,"duration_ms")<=60000 &&
+            (!strcmp(str(interrupted,"result"),"success") || !strcmp(str(interrupted,"result"),"short") || !strcmp(str(interrupted,"result"),"failed"))) {
             result.duration = (int)num(interrupted, "duration_ms");
             result.result = strcmp(str(interrupted, "result"), "failed") ? 0 : -1;
             result.reason = !strcmp(str(interrupted, "stop_reason"), "released") ? 0 : !strcmp(str(interrupted, "stop_reason"), "limit") ? 1 : 2;
