@@ -12,7 +12,7 @@ package=releases/$version/payload
 make -B all mux-adapter
 mkdir -p "$package/sounds" "$package/deploy" "$package/docs"
 cp instrument_app luckfox_mux_adapter.so config.example.json CHANGELOG.md "$package/"
-cp sounds/*.wav "$package/sounds/"
+cp sounds/*.wav sounds/stability-voice-manifest.json "$package/sounds/"
 cp docs/light-test.md "$package/docs/"
 cp deploy/TZ deploy/RkLunch.sh deploy/S80instrument deploy/README.md deploy/install_bundle.sh \
    deploy/wpa_supplicant.default.conf "$package/deploy/"

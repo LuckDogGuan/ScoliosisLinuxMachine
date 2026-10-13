@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <syslog.h>
+#include <sys/prctl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -57,13 +58,17 @@ typedef struct {
     char wifi_state[32], event[ID_SIZE];
     Item items[MAX_ITEMS];
 } WorkerResult;
-typedef struct { pid_t pid; int fd; } Worker;
+typedef struct { pid_t pid; int fd; uint64_t started; } Worker;
 typedef struct {
     Config *config;
     int udp, paired, gate, keys, release_required, recording, stop_sent, revoking;
-    int middle_fired, audio_result, audio_volume;
+    int middle_fired, audio_result, audio_volume, camera_fault;
+    uint64_t recording_mono, stopped_mono, recovery_retry;
+    cJSON *last_completed;
+    char system_boot[64];
+    Worker recovery;
     uint64_t middle_hold;
-    char audio_id[ID_SIZE], event_cursor[ID_SIZE];
+    char audio_id[ID_SIZE], event_cursor[256];
     char boot[ID_SIZE], host[ID_SIZE], txn[ID_SIZE], candidate[ID_SIZE], candidate_ip[64];
     int candidate_port;
     char revoked_host[ID_SIZE], unpair[ID_SIZE], gate_id[ID_SIZE], capture_id[ID_SIZE], current_id[ID_SIZE], current_gate[ID_SIZE];
@@ -134,9 +139,15 @@ static int make_worker(Worker *worker, int *child_fd) {
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets)) return -1;
     pid_t pid = fork();
     if (pid < 0) { close(sockets[0]); close(sockets[1]); return -1; }
-    if (!pid) { close(sockets[0]); *child_fd = sockets[1]; return 0; }
+    if (!pid) {
+        (void)setpgid(0,0); (void)prctl(PR_SET_PDEATHSIG,SIGKILL);
+        if (getppid()==1) _exit(1);
+        close(sockets[0]); *child_fd = sockets[1]; return 0;
+    }
     close(sockets[1]);
     worker->pid = pid;
+    worker->started = v3_now();
+    (void)setpgid(pid,pid);
     worker->fd = sockets[0];
     int flags = fcntl(worker->fd, F_GETFL, 0);
     (void)fcntl(worker->fd, F_SETFL, flags | O_NONBLOCK);
@@ -144,7 +155,7 @@ static int make_worker(Worker *worker, int *child_fd) {
 }
 static void child_isolate(Runtime *rt, int own_fd) {
     close(rt->udp);
-    Worker *workers[] = {&rt->record, &rt->upload, &rt->maintenance, &rt->notifier, &rt->audio, &rt->discard, &rt->diagnostics};
+    Worker *workers[] = {&rt->record, &rt->upload, &rt->maintenance, &rt->notifier, &rt->audio, &rt->discard, &rt->diagnostics, &rt->recovery};
     for (size_t i = 0; i < sizeof(workers)/sizeof(workers[0]); i++)
         if (workers[i]->pid > 0 && workers[i]->fd >= 0 && workers[i]->fd != own_fd) close(workers[i]->fd);
 }
@@ -296,9 +307,8 @@ static void start_record(Runtime *rt) {
         child_isolate(rt, fd);
         WorkerResult result = {.type = 'C', .result = -1, .reason = 2};
         int accepted = !http_v3_start(rt->config, rt->current_id, rt->current_gate, rt->boot);
-        /* Borrow pending audio into this worker so a hash task never stalls the next round. */
-        while (rt->sound_out < rt->sound_in) (void)audio_play(rt->sounds[rt->sound_out++ % 8]);
-        if (accepted && !audio_play("capture_start")) {
+        /* Audio failure must never veto a valid recording authorization. */
+        if (accepted) {
             result.result = capture_controlled(rt->config, rt->current_id, fd, &result.duration, &result.reason);
         }
         result.ended_at = wall_ms();
@@ -354,10 +364,14 @@ static void completed(Runtime *rt, const WorkerResult *result) {
         syslog(LOG_CRIT, "cannot persist completed capture %s; retained for retry", rt->current_id);
         disable_gate(rt); cJSON_Delete(event); return;
     }
+    cJSON_Delete(rt->last_completed);
+    rt->last_completed=cJSON_Duplicate(event,1);
+    instrument_trace("capture_completed",rt->current_id,rt->current_gate,rt->boot,str(event,"result"));
     immediate_completion(rt, event);
     cJSON_Delete(event);
     rt->completion_pending = 0; rt->completion_event[0] = 0;
     rt->recording = 0; rt->current_id[0] = 0; rt->started_at = 0;
+    rt->recording_mono=rt->stopped_mono=0;
     COPY(rt->phase, rt->capture_id[0] ? "prepared" : "idle");
     queue_sound(rt, result->result ? "capture_failed" : result->duration < 3000 ? "capture_short" : "capture_done");
     rt->last_maintenance = 0;
@@ -373,12 +387,16 @@ static void record_messages(Runtime *rt) {
             char response = rt->gate && v3_now() < rt->lease && rt->keys == 5 ? 'G' : 'X';
             (void)send(rt->record.fd, &response, 1, MSG_NOSIGNAL);
         } else if (result.type == 'S') {
-            rt->recording = 1; rt->started_at = wall_ms(); COPY(rt->phase, "recording");
+            rt->recording = 1; rt->started_at = wall_ms();
+            rt->recording_mono=v3_now(); rt->stopped_mono=0;
+            COPY(rt->phase, "recording"); queue_sound(rt,"capture_start");
+            instrument_trace("actual_recording",rt->current_id,rt->current_gate,rt->boot,"");
             syslog(LOG_INFO, "V3 actual recording %s", rt->current_id);
             /* Recording notification is persisted for maintenance worker, replaced at completion. */
             cJSON *event = cJSON_CreateObject();
             cJSON_AddNumberToObject(event, "version", 3);
             cJSON_AddStringToObject(event, "device_id", rt->config->device_id);
+            cJSON_AddStringToObject(event, "boot_id", rt->boot);
             cJSON_AddStringToObject(event, "capture_id", rt->current_id);
             cJSON_AddStringToObject(event, "gate_id", rt->current_gate);
             cJSON_AddStringToObject(event, "phase", "recording");
@@ -389,16 +407,20 @@ static void record_messages(Runtime *rt) {
             rt->last_maintenance = 0;
         }
     } else if (size == (ssize_t)sizeof(result) && result.type == 'C') {
-        finish_worker(&rt->record); completed(rt, &result);
+        finish_worker(&rt->record);
+        if (result.result) { rt->camera_fault=1; disable_gate(rt); }
+        completed(rt, &result);
     } else if (size == 0) {
         finish_worker(&rt->record); memset(&result, 0, sizeof(result));
-        result.result = -1; result.reason = 2; result.ended_at = wall_ms(); completed(rt, &result);
+        result.result = -1; result.reason = 2; result.ended_at = wall_ms();
+        rt->camera_fault=1; disable_gate(rt); completed(rt, &result);
     }
     int released = rt->keys < 0 || (rt->recording ? (rt->keys & 5) != 5 : rt->keys != 5);
     if (rt->record.pid && released && !rt->stop_sent) {
         char stop = 'T'; (void)send(rt->record.fd, &stop, 1, MSG_NOSIGNAL);
         rt->stop_sent = 1;
         if (rt->recording) {
+            rt->stopped_mono=v3_now();
             COPY(rt->phase, "finalizing");
             cJSON *event = v3_read_json(STATE_DIR "/recording-v3.json");
             if (event) {
@@ -410,7 +432,74 @@ static void record_messages(Runtime *rt) {
         syslog(LOG_INFO, "V3 stop requested %s", rt->current_id);
     }
 }
+
+static void abort_worker(Worker *worker) {
+    if (!worker->pid) return;
+    /* Commands have isolated groups; stop them before their worker disappears. */
+    char children[96]; snprintf(children,sizeof(children),"/proc/%ld/task/%ld/children",(long)worker->pid,(long)worker->pid);
+    FILE *list=fopen(children,"r");
+    if (list) {
+        long child;
+        while (fscanf(list,"%ld",&child)==1) if (child>1) (void)kill(-(pid_t)child,SIGKILL);
+        fclose(list);
+    }
+    (void)kill(-worker->pid,SIGKILL); (void)kill(worker->pid,SIGKILL);
+    close(worker->fd); worker->fd=-1; worker->pid=0;
+}
+static void worker_watchdog(Runtime *rt,uint64_t now) {
+    struct { Worker *worker; uint64_t limit; const char *name; } workers[]={
+        {&rt->record,120000,"record"},{&rt->upload,365000,"upload"},
+        {&rt->maintenance,120000,"maintenance"},{&rt->notifier,15000,"notifier"},
+        {&rt->audio,15000,"audio"},{&rt->discard,120000,"discard"},
+        {&rt->diagnostics,15000,"diagnostics"},{&rt->recovery,15000,"camera_recovery"}
+    };
+    for (size_t i=0;i<sizeof(workers)/sizeof(workers[0]);i++) {
+        Worker *worker=workers[i].worker;
+        if (!worker->pid || now-worker->started<workers[i].limit) continue;
+        instrument_trace("worker_timeout",rt->current_id,rt->gate_id,rt->boot,workers[i].name);
+        abort_worker(worker);
+        if (worker==&rt->record) {
+            rt->camera_fault=1; disable_gate(rt);
+            WorkerResult failed={.result=-1,.reason=2,.duration=rt->recording_mono ? (int)(now-rt->recording_mono) : 0};
+            if (failed.duration>60000) failed.duration=60000;
+            completed(rt,&failed);
+        } else if (worker==&rt->upload) rt->upload_id[0]=0;
+        else if (worker==&rt->audio) rt->audio_result=-1;
+    }
+    if (rt->recovery.pid) {
+        WorkerResult result; ssize_t size=recv(rt->recovery.fd,&result,sizeof(result),MSG_DONTWAIT);
+        if (size==(ssize_t)sizeof(result) || size==0) {
+            finish_worker(&rt->recovery);
+            if (size==(ssize_t)sizeof(result) && !result.result) {
+                rt->camera_fault=0;
+                instrument_trace("camera_recovered","","",rt->boot,"stopped");
+            } else rt->recovery_retry=now+5000;
+        }
+    }
+    if (rt->camera_fault && !rt->recovery.pid && now>=rt->recovery_retry) {
+        rt->recovery_retry=now+5000;
+        int fd; int branch=make_worker(&rt->recovery,&fd);
+        if (!branch) {
+            child_isolate(rt,fd);
+            int status=-1; (void)camera_stop();
+            WorkerResult result={.result=camera_status(&status) || status!=0 ? -1 : 0};
+            (void)send(fd,&result,sizeof(result),MSG_NOSIGNAL);close(fd);_exit(0);
+        }
+    }
+}
+
 static void maintenance(Runtime *rt, uint64_t now) {
+    /* Prompt playback never queues behind network/storage maintenance. */
+    if (!rt->audio.pid && rt->sound_in!=rt->sound_out && strcmp(rt->phase,"starting")) {
+        char sound[32];COPY(sound,rt->sounds[rt->sound_out%8]);
+        int fd;int branch=make_worker(&rt->audio,&fd);
+        if (!branch) {
+            child_isolate(rt,fd);
+            WorkerResult result={.type='P',.result=audio_play(sound)};
+            (void)send(fd,&result,sizeof(result),MSG_NOSIGNAL);close(fd);_exit(0);
+        }
+        if (branch>0) rt->sound_out++;
+    }
     if (rt->maintenance.pid) {
         WorkerResult result; ssize_t size = recv(rt->maintenance.fd, &result, sizeof(result), MSG_DONTWAIT);
         if (size == (ssize_t)sizeof(result)) {
@@ -442,7 +531,8 @@ static void maintenance(Runtime *rt, uint64_t now) {
                     (void)v3_save_json(path, value); cJSON_Delete(value);
                 }
             } else if (result.type == 'E') {
-                rt->event_retry = now + (result.result ? 2000 : 0);
+                rt->event_retry = now + 2000;
+                if (result.event[0]) snprintf(rt->event_cursor,sizeof(rt->event_cursor),"%s.json",result.event);
                 acknowledge_completion(rt, &result);
             } else if (result.type == 'R' && !result.result) {
                 cJSON *event = v3_read_json(STATE_DIR "/recording-v3.json");
@@ -454,37 +544,36 @@ static void maintenance(Runtime *rt, uint64_t now) {
         } else if (size == 0) finish_worker(&rt->maintenance);
         return;
     }
-    char event_id[ID_SIZE] = {0};
-    cJSON *event = rt->paired ? next_event(rt, event_id) : NULL;
-    char type = 0, sound[32] = {0};
+    /* Durable event scans run in the bounded worker, never in the input loop. */
+    cJSON *event = NULL;
+    char type = 0;
     cJSON *recording_event = NULL;
     if (now >= rt->metric_retry && (!rt->metrics_at || now - rt->metrics_at >= 10000)) type = 'M';
-    else if (event && !rt->notifier.pid && now >= rt->event_retry) type = 'E';
+    else if (rt->paired && !rt->notifier.pid && now >= rt->event_retry) type = 'E';
     else if (rt->recording && rt->paired) {
         recording_event = v3_read_json(STATE_DIR "/recording-v3.json");
         if (recording_event && !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(recording_event, "acknowledged"))) type = 'R';
-    }
-    if (!type && !rt->audio.pid && rt->sound_in != rt->sound_out && strcmp(rt->phase, "starting")) {
-        type = 'A'; COPY(sound, rt->sounds[rt->sound_out++ % 8]);
     }
 
     if (!type) { cJSON_Delete(event); cJSON_Delete(recording_event); return; }
     rt->last_maintenance = now;
     if (type == 'M') rt->metric_retry = now + 10000;
+    if (type == 'E') rt->event_retry = now + 2000;
     rt->maintenance_type = type;
     int fd; int branch = make_worker(&rt->maintenance, &fd);
     if (!branch) {
         child_isolate(rt, fd);
         WorkerResult result = {.type = type};
         if (type == 'E') {
-            result.result = http_v3_status(rt->config, event);
+            char event_id[ID_SIZE]={0}; event=next_event(rt,event_id);
+            result.result = event ? http_v3_status(rt->config, event) : 0;
             COPY(result.event, str(event, "capture_id"));
+            cJSON_Delete(event);
         } else if (type == 'R') {
             result.result = http_v3_status(rt->config, recording_event);
             COPY(result.event, str(recording_event, "capture_id"));
             COPY(result.wifi_state, str(recording_event, "phase"));
         }
-        else if (type == 'A') result.result = audio_play(sound);
         else {
             char address[64]; result.wifi = !wifi_address(address, sizeof(address));
             result.gateway = getenv("INSTRUMENT_HOST_TEST") ? 1 : result.wifi ? wifi_gateway_reachable() : 0;
@@ -617,6 +706,10 @@ static void audio_messages(Runtime *rt) {
     if (size != (ssize_t)sizeof(result) && size != 0) return;
     if (size == (ssize_t)sizeof(result) && result.type == 'v') { rt->audio_volume=result.duration; return; }
     finish_worker(&rt->audio);
+    if (size==(ssize_t)sizeof(result) && result.type=='P') {
+        instrument_trace("prompt_complete","","",rt->boot,result.result ? "failed" : "success");
+        return;
+    }
     if (size == (ssize_t)sizeof(result)) rt->audio_volume = result.duration;
     rt->audio_result = size == (ssize_t)sizeof(result) ? result.result : -1;
     if (size == (ssize_t)sizeof(result) && !result.result) rt->config->volume = result.duration;
@@ -659,6 +752,21 @@ static void hello_reply(Runtime *rt, cJSON *reply, uint64_t now) {
     cJSON_AddBoolToObject(reply, "diagnostics_active", rt->diagnostics_lease > now);
     cJSON_AddStringToObject(reply, "wifi_state", rt->wifi_state);
     cJSON_AddBoolToObject(reply, "gate_enabled", rt->gate && now < rt->lease);
+    cJSON_AddNumberToObject(reply,"lease_remaining_ms",rt->gate && now<rt->lease ? (double)(rt->lease-now) : 0);
+    cJSON_AddStringToObject(reply,"system_boot_id",rt->system_boot);
+    cJSON_AddNumberToObject(reply,"application_pid",getpid());
+    cJSON_AddBoolToObject(reply,"camera_fault",rt->camera_fault);
+    cJSON *snapshot=cJSON_AddObjectToObject(reply,"capture_snapshot");
+    cJSON_AddStringToObject(snapshot,"device_id",rt->config->device_id);
+    cJSON_AddStringToObject(snapshot,"boot_id",rt->boot);
+    cJSON_AddStringToObject(snapshot,"capture_id",rt->current_id[0] ? rt->current_id : rt->capture_id);
+    cJSON_AddStringToObject(snapshot,"gate_id",rt->current_id[0] ? rt->current_gate : rt->gate_id);
+    cJSON_AddStringToObject(snapshot,"phase",rt->phase);
+    cJSON_AddNumberToObject(snapshot,"started_at_ms",(double)rt->started_at);
+    uint64_t end=rt->stopped_mono ? rt->stopped_mono : now;
+    cJSON_AddNumberToObject(snapshot,"elapsed_ms",rt->recording_mono && end>=rt->recording_mono ? (double)(end-rt->recording_mono) : 0);
+    if (rt->last_completed && rt->paired && !strcmp(str(rt->last_completed,"host_id"),rt->host) && !strcmp(str(reply,"host_id"),rt->host))
+        cJSON_AddItemToObject(reply,"last_completed_event",cJSON_Duplicate(rt->last_completed,1));
     cJSON_AddStringToObject(reply, "gate_id", rt->gate_id);
     cJSON_AddStringToObject(reply, "capture_id", rt->record.pid ? rt->current_id : rt->capture_id);
     cJSON_AddNumberToObject(reply, "control_sequence", (double)rt->sequence);
@@ -892,7 +1000,7 @@ static void receive_udp(Runtime *rt, uint64_t now) {
             cJSON_AddStringToObject(reply, "phase", rt->phase);
         } else if (!strcmp(op, "capture_enable")) {
             const char *gate = str(request, "gate_id"); int ttl = (int)num(request, "ttl_ms");
-            if (now >= rt->diagnostics_lease && !rt->diagnostics.pid && !rt->audio.pid && !rt->record.pid && !rt->completion_pending && safe_id(gate) && ttl > 0 && ttl <= 6000 && strcmp(gate, rt->gate_id)) {
+            if (!rt->camera_fault && now >= rt->diagnostics_lease && !rt->diagnostics.pid && !rt->record.pid && !rt->completion_pending && safe_id(gate) && ttl > 0 && ttl <= 6000 && strcmp(gate, rt->gate_id)) {
                 COPY(rt->gate_id, gate); rt->gate = 1; rt->lease = now + (unsigned)ttl;
                 rt->capture_id[0] = 0; queue_sound(rt, "capture_enabled"); success = 1;
             }
@@ -994,6 +1102,8 @@ int runtime_run(Config *config) {
     rt.backlight_brightness=brightness >= 0 && brightness <= 100 && brightness == (int)brightness ? (int)brightness : 100;
     platform_backlight_configure(rt.backlight_brightness); cJSON_Delete(backlight);
     rt.startup_at = v3_now();
+    FILE *system_boot=fopen("/proc/sys/kernel/random/boot_id","r");
+    if (system_boot) { if (!fgets(rt.system_boot,sizeof(rt.system_boot),system_boot)) rt.system_boot[0]=0; fclose(system_boot); rt.system_boot[strcspn(rt.system_boot,"\r\n")]=0; }
     COPY(rt.phase, "idle"); COPY(rt.wifi_state, "unknown");
     if (mkdir(EVENTS_DIR, 0700) && errno != EEXIST) return 1;
     resume_discards();
@@ -1029,6 +1139,10 @@ int runtime_run(Config *config) {
     if (bind(rt.udp, (struct sockaddr *)&address, sizeof(address))) { close(rt.udp); return 1; }
     signal(SIGINT, halt); signal(SIGTERM, halt); signal(SIGPIPE, SIG_IGN);
     light_update(rt.paired);
+    queue_sound(&rt,"boot_ready");
+    char startup[256];
+    snprintf(startup,sizeof(startup),"{\"system_boot_id\":\"%s\",\"pid\":%ld,\"version\":\"%s\"}",rt.system_boot,(long)getpid(),INSTRUMENT_VERSION);
+    instrument_trace("application_started","","",rt.boot,startup);
     syslog(LOG_INFO, "V3 coordinator boot=%s, gate disabled, buttons gpio3/gpio4/gpio0", rt.boot);
     while (active) {
         uint64_t now = v3_now();
@@ -1039,7 +1153,11 @@ int runtime_run(Config *config) {
             char detail[48]; snprintf(detail,sizeof(detail),"{\"key_mask\":%d}",rt.keys);
             instrument_trace("buttons",rt.current_id,rt.gate_id,rt.boot,detail);
         }
-        if (rt.gate && now >= rt.lease) disable_gate(&rt);
+        if (rt.gate && now >= rt.lease) {
+            instrument_trace("gate_disabled",rt.current_id,rt.gate_id,rt.boot,"lease_expired");
+            disable_gate(&rt);
+        }
+        worker_watchdog(&rt,now);
         if (rt.diagnostics_lease && now >= rt.diagnostics_lease) {
             rt.diagnostics_lease=0; rt.release_required=1; rt.middle_fired=1;
             rt.hold_started=rt.middle_hold=0;
@@ -1072,8 +1190,7 @@ int runtime_run(Config *config) {
             else {
                 if (!rt.hold_started) rt.hold_started = now;
                 if (instrument_can_start(rt.release_required, rt.gate && now < rt.lease,
-                    rt.capture_id[0] != 0, rt.record.pid || rt.completion_pending || rt.audio.pid || rt.notifier.pid ||
-                    (rt.maintenance.pid && rt.maintenance_type == 'A'), now - rt.hold_started)) start_record(&rt);
+                    rt.capture_id[0] != 0, rt.camera_fault || rt.record.pid || rt.completion_pending || rt.notifier.pid, now - rt.hold_started)) start_record(&rt);
             }
         }
         diagnostics_tick(&rt,now);
@@ -1081,7 +1198,11 @@ int runtime_run(Config *config) {
         if (rt.completion_pending && !rt.record.pid && now >= rt.completion_retry) {
             WorkerResult retry = rt.completion; completed(&rt, &retry);
         }
-        discard_messages(&rt); notifier_messages(&rt); upload_messages(&rt); audio_messages(&rt); receive_udp(&rt, now); maintenance(&rt, now);
+        uint64_t before_workers=v3_now();
+        discard_messages(&rt); notifier_messages(&rt); upload_messages(&rt); audio_messages(&rt);
+        uint64_t before_udp=v3_now(); receive_udp(&rt, now);
+        uint64_t before_maintenance=v3_now(); maintenance(&rt, now);
+        uint64_t before_lights=v3_now();
         int connected=rt.paired && rt.last_host_contact && now-rt.last_host_contact<15000;
         int light_mode=light_status_mode(rt.pair_window > now && !rt.paired && !rt.revoking,
             rt.paired,connected,rt.keys<0 || !strcmp(rt.wifi_state,"needs_attention"),0);
@@ -1093,6 +1214,12 @@ int runtime_run(Config *config) {
             instrument_trace("status_light","","",rt.boot,light_result ? "unavailable" : light_mode==LIGHT_PAIRING ? "breathe" : light_mode==LIGHT_DISCONNECTED ? "slow" : light_mode==LIGHT_FAULT ? "fast" : "steady");
             previous_light_result=light_result; previous_light_mode=light_mode;
         }
+        uint64_t loop_end=v3_now();
+        if (loop_end-now>100) {
+            char detail[256]; snprintf(detail,sizeof(detail),"{\"total_ms\":%llu,\"control_ms\":%llu,\"workers_ms\":%llu,\"udp_ms\":%llu,\"maintenance_ms\":%llu,\"lights_ms\":%llu}",
+                (unsigned long long)(loop_end-now),(unsigned long long)(before_workers-now),(unsigned long long)(before_udp-before_workers),(unsigned long long)(before_maintenance-before_udp),(unsigned long long)(before_lights-before_maintenance),(unsigned long long)(loop_end-before_lights));
+            instrument_trace("slow_loop",rt.current_id,rt.gate_id,rt.boot,detail);
+        }
         /* Every child is bounded; reap send-then-exit races without blocking input. */
         while (waitpid(-1, NULL, WNOHANG) > 0) {}
         struct pollfd input = {.fd = rt.udp, .events = POLLIN};
@@ -1101,14 +1228,21 @@ int runtime_run(Config *config) {
     disable_gate(&rt);
     if (rt.record.pid) {
         char stop = 'T'; (void)send(rt.record.fd, &stop, 1, MSG_NOSIGNAL);
-        while (rt.record.pid) { record_messages(&rt); struct pollfd input = {.fd = rt.record.fd, .events = POLLIN}; (void)poll(&input, 1, 10); }
+        while (rt.record.pid) {
+            worker_watchdog(&rt,v3_now()); record_messages(&rt);
+            struct pollfd input = {.fd = rt.record.fd, .events = POLLIN}; (void)poll(&input, 1, 10);
+        }
     }
-    if (rt.diagnostics.pid) (void)waitpid(rt.diagnostics.pid, NULL, 0);
-    if (rt.notifier.pid) (void)waitpid(rt.notifier.pid, NULL, 0);
-    if (rt.upload.pid) (void)waitpid(rt.upload.pid, NULL, 0);
-    if (rt.maintenance.pid) (void)waitpid(rt.maintenance.pid, NULL, 0);
-    if (rt.discard.pid) (void)waitpid(rt.discard.pid, NULL, 0);
-    if (rt.audio.pid) { (void)waitpid(rt.audio.pid, NULL, 0); (void)audio_set_volume(config->volume); }
+    buttons_close();
+    instrument_trace("application_stopping","","",rt.boot,"signal");
+    cJSON_Delete(rt.last_completed);
+    if (rt.recovery.pid) abort_worker(&rt.recovery);
+    if (rt.diagnostics.pid) abort_worker(&rt.diagnostics);
+    if (rt.notifier.pid) abort_worker(&rt.notifier);
+    if (rt.upload.pid) abort_worker(&rt.upload);
+    if (rt.maintenance.pid) abort_worker(&rt.maintenance);
+    if (rt.discard.pid) abort_worker(&rt.discard);
+    if (rt.audio.pid) abort_worker(&rt.audio);
     light_status_close();
     close(rt.udp); return 0;
 }

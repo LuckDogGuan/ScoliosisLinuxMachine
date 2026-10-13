@@ -10,7 +10,7 @@ void instrument_trace(const char *event, const char *capture, const char *gate, 
     int lock = open(STATE_DIR "/trace.lock", O_CREAT|O_WRONLY|O_CLOEXEC, 0600);
     if (lock < 0) return;
     struct flock guard = {.l_type=F_WRLCK, .l_whence=SEEK_SET};
-    if (fcntl(lock, F_SETLKW, &guard)) { close(lock); return; }
+    if (fcntl(lock, F_SETLK, &guard)) { close(lock); return; }
     struct stat st;
     if (!stat(STATE_DIR "/runtime.jsonl", &st) && st.st_size > 4*1024*1024) {
         (void)rename(STATE_DIR "/runtime.jsonl.1", STATE_DIR "/runtime.jsonl.2");

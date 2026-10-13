@@ -9,7 +9,7 @@
 
 #include <stddef.h>
 
-#define INSTRUMENT_VERSION "3.3.7"
+#define INSTRUMENT_VERSION "3.3.8"
 #ifndef INSTRUMENT_ROOT
 #define INSTRUMENT_ROOT "/opt/instrument"
 #endif
@@ -84,5 +84,6 @@ int light_status_mode(int pairing, int paired, int connected, int fault, int low
 int light_status_tick(int mode, long long now);
 void light_status_close(void);
 int run_command(char *const argv[]);
+int run_command_timeout(char *const argv[], unsigned timeout_ms);
 
 #endif

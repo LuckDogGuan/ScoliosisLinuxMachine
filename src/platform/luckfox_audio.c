@@ -11,7 +11,7 @@ static const char *const sounds[] = {
     "capture_done", "uploaded", "saved_on_device", "storage_low", "capture_failed",
     "please_connect", "pair_success", "pair_failed", "wifi_connected",
     "wifi_disconnected", "pair_disconnected", "capture_start", "capture_short",
-    "capture_enabled", "capture_disabled", "wifi_recovering", "wifi_attention", "wifi_restored", "pair_window", "volume_test", "pair_window_closed"
+    "capture_enabled", "capture_disabled", "wifi_recovering", "wifi_attention", "wifi_restored", "pair_window", "volume_test", "pair_window_closed", "boot_ready"
 };
 static time_t last_played[sizeof(sounds) / sizeof(sounds[0])];
 
@@ -43,7 +43,7 @@ int audio_play(const char *name) {
         if (n < 0 || (size_t)n >= sizeof(path) || access(path, R_OK)) return -1;
     }
     char *const args[] = {"aplay", "-q", "-D", "plughw:0,0", path, NULL};
-    int result = run_command(args);
+    int result = run_command_timeout(args,8000);
     if (!result) last_played[index] = now;
     return result;
 }
