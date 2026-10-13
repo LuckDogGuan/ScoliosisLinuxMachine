@@ -37,7 +37,8 @@ int main(void) {
     tick(13200,5,1,0);tick(13400,5,1,0); /* sampling gap disarms */
     tick(13410,0,1,0);tick(13420,5,1,0);
     for(uint64_t t=13430;t<=13920;t+=10) tick(t,5,1,t<13920?0:1);
-    tick(13930,5,0,0);tick(13940,5,1,0); /* lease/gate loss */
+    tick(14120,5,1,1); /* business gap with fresh sampled keys must stay lit */
+    tick(14130,5,0,0);tick(14140,5,1,0); /* lease/gate loss */
     assert(platform_backlight_percent(-1)==-1 && platform_backlight_percent(101)==-1);
     for(int percent=0;percent<=100;percent++) {
         assert(platform_backlight_percent(percent)==0);

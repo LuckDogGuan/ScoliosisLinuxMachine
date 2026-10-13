@@ -113,10 +113,11 @@ int buttons_snapshot(uint32_t now, int *mask) {
 /* Gesture timing is independent of record/upload workers. Invalid samples and
  * disabled permissions fail closed; require a release before another hold. */
 int backlight_tick(uint64_t now, int keys, int allowed) {
-    static uint64_t held, release_at, previous;
+    static uint64_t held, release_at;
     static int pressing, lit, disarmed = 1;
     int desired = lit;
-    if (!allowed || keys < 0 || (previous && now - previous > 100)) {
+    /* buttons_snapshot already rejects stale/invalid samples independently of business I/O. */
+    if (!allowed || keys < 0) {
         pressing = 0; release_at = 0; disarmed = 1; desired = 0;
     } else {
         if (!keys) disarmed = 0;
@@ -130,7 +131,6 @@ int backlight_tick(uint64_t now, int keys, int allowed) {
             if (release_at && now >= release_at) { desired = 0; release_at = 0; }
         }
     }
-    previous = now;
     if (platform_backlight_set(desired)) { lit = 0; return -1; }
     if (lit != desired) {
         instrument_trace("backlight", "", "", "", desired ? "on" : "off");

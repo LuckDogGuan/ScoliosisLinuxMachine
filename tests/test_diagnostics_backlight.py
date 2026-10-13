@@ -27,16 +27,30 @@ try:
         except socket.timeout:time.sleep(.05)
     assert 'backlight_brightness' in ask('hello_query')['capabilities']
     assert not ask('diagnostics_backlight',diagnostics_id='diag',brightness=50)['ok']
-    assert ask('diagnostics_start',diagnostics_id='diag',ttl_ms=5000)['ok']
+    reply=ask('diagnostics_start',diagnostics_id='diag',ttl_ms=5000)
+    assert reply['ok'] and reply['brightness']==0 and reply['saved_brightness']==100,reply
     for value in [-1,101,0.5]:assert not ask('diagnostics_backlight',diagnostics_id='diag',brightness=value)['ok']
     assert not ask('diagnostics_backlight',diagnostics_id='wrong',brightness=50)['ok']
     for value in [0,1,25,50,75,99,100]:
         reply=ask('diagnostics_backlight',diagnostics_id='diag',brightness=value)
         assert reply['ok'] and reply['brightness']==value,reply
         assert json.loads((state/'backlight.json').read_text())['brightness']==value
-    assert ask('diagnostics_renew',diagnostics_id='diag',ttl_ms=5000)['brightness']==100
+    assert ask('diagnostics_backlight',diagnostics_id='diag',brightness=37)['saved_brightness']==37
+    assert ask('diagnostics_renew',diagnostics_id='diag',ttl_ms=5000)['brightness']==37
     assert ask('diagnostics_end',diagnostics_id='diag')['ok']
     assert not ask('diagnostics_backlight',diagnostics_id='diag',brightness=20)['ok']
+    reply=ask('diagnostics_start',diagnostics_id='reopen',ttl_ms=5000)
+    assert reply['ok'] and reply['brightness']==0 and reply['saved_brightness']==37,reply
+    assert ask('diagnostics_end',diagnostics_id='reopen')['ok']
+    proc.terminate();proc.wait(timeout=10)
+    proc=subprocess.Popen([str(exe),str(cfg)],env={**os.environ,'INSTRUMENT_HOST_TEST':'1','INSTRUMENT_BUTTON_FILE':str(buttons)},stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    boot=None
+    for _ in range(20):
+        try:boot=ask('hello_query')['boot_id'];break
+        except socket.timeout:time.sleep(.05)
+    reply=ask('diagnostics_start',diagnostics_id='restart',ttl_ms=5000)
+    assert reply['ok'] and reply['brightness']==0 and reply['saved_brightness']==37,reply
+    assert ask('diagnostics_end',diagnostics_id='restart')['ok'];time.sleep(.2)
     assert ask('diagnostics_start',diagnostics_id='expire',ttl_ms=100)['ok'];time.sleep(.2)
     assert not ask('diagnostics_backlight',diagnostics_id='expire',brightness=20)['ok']
     print('PASS: actual UDP brightness range/token/lease/end/expiry and persistence')

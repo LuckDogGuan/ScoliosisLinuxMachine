@@ -1004,12 +1004,15 @@ static void receive_udp(Runtime *rt, uint64_t now) {
             }
             if (!success) cJSON_AddStringToObject(reply,"error","backlight_unavailable_or_invalid");
             cJSON_AddNumberToObject(reply,"brightness",rt->diagnostics_brightness);
+            cJSON_AddNumberToObject(reply,"saved_brightness",rt->backlight_brightness);
         } else if (!strcmp(op, "diagnostics_start")) {
             const char *id = str(request,"diagnostics_id"); int ttl=(int)num(request,"ttl_ms");
             if (!rt->gate && !rt->record.pid && !rt->completion_pending && !rt->upload.pid && !rt->diagnostics.pid && safe_id(id) && ttl>0 && ttl<=6000) {
                 rt->diagnostics_brightness=0; COPY(rt->diagnostics_id,id); rt->diagnostics_lease=now+(unsigned)ttl; rt->diagnostics_next=now;
                 rt->hold_started=rt->middle_hold=0; rt->release_required=1; success=1;
             }
+            cJSON_AddNumberToObject(reply,"brightness",rt->diagnostics_brightness);
+            cJSON_AddNumberToObject(reply,"saved_brightness",rt->backlight_brightness);
         } else if (!strcmp(op,"diagnostics_renew") || !strcmp(op,"diagnostics_status") || !strcmp(op,"diagnostics_end")) {
             int ttl=(int)num(request,"ttl_ms");
             if (!strcmp(rt->diagnostics_id,str(request,"diagnostics_id")) && now < rt->diagnostics_lease) {
@@ -1018,6 +1021,7 @@ static void receive_udp(Runtime *rt, uint64_t now) {
                 else if (ttl>0 && ttl<=6000) {rt->diagnostics_lease=now+(unsigned)ttl; success=1;}
             }
             cJSON_AddNumberToObject(reply,"brightness",rt->diagnostics_brightness);
+            cJSON_AddNumberToObject(reply,"saved_brightness",rt->backlight_brightness);
             cJSON_AddNumberToObject(reply,"key_mask",rt->keys);
             cJSON_AddNumberToObject(reply,"remaining_ms",rt->diagnostics_lease>now ? (double)(rt->diagnostics_lease-now) : 0);
         } else if (!strcmp(op, "unpair")) {
@@ -1242,8 +1246,13 @@ int runtime_run(Config *config) {
         int light_mode=light_status_mode(rt.pair_window > now && !rt.paired && !rt.revoking,
             rt.paired,connected,rt.keys<0 || !strcmp(rt.wifi_state,"needs_attention"),0);
         int light_result=light_status_tick(light_mode,(long long)now);
-        if (now < rt.diagnostics_lease) (void)platform_backlight_percent(rt.diagnostics_brightness);
-        else (void)backlight_tick(now, rt.keys, rt.gate && now < rt.lease && !rt.revoking);
+        uint64_t light_now=v3_now();
+        if (light_now < rt.diagnostics_lease) (void)platform_backlight_percent(rt.diagnostics_brightness);
+        else {
+            int fresh_keys=-1;
+            (void)buttons_snapshot((uint32_t)light_now,&fresh_keys);
+            (void)backlight_tick(light_now,fresh_keys,rt.gate && light_now < rt.lease && !rt.revoking);
+        }
         static int previous_light_result=-2, previous_light_mode=-1;
         if (light_result!=previous_light_result || light_mode!=previous_light_mode) {
             instrument_trace("status_light","","",rt.boot,light_result ? "unavailable" : light_mode==LIGHT_PAIRING ? "breathe" : light_mode==LIGHT_DISCONNECTED ? "slow" : light_mode==LIGHT_FAULT ? "fast" : "steady");
