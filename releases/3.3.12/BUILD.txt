@@ -1,0 +1,4 @@
+version=3.3.12
+release_tag=instrument-v3.3.12
+source_commit=f94bea2dcceef2d298b2998ec939359cc1e1944a
+build_utc=2026-10-14T05:39:26Z
