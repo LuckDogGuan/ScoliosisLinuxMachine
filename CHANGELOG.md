@@ -1,3 +1,10 @@
+# 3.3.12 (2026-10-14)
+
+- Keep 500 ms backlight and 1000 ms release-off delay. Reserve PC speech handover at 800 ms; announce capture once at 1000 ms; request recording from 1200 ms only while the authorized dual-button gesture remains valid.
+- Advertise speech_preempt and expose read-only cancellation state. Device capture prompts take priority over PC names; normal upload, connection and capture-gate transitions remain in UI.
+- Speech handover gap reduced to 200 ms. Final duration_ms remains the recording worker result shared by completion and pending-file metadata.
+- Host boundary/lease/cancellation tests and ARM build passed. Real button-to-frame and audible timing acceptance must be recorded separately; no physical acceptance is implied by host tests.
+
 # 3.3.11 — 2026-10-13
 
 - 背光只根据独立按键采样有效性和拍摄许可保护关灯，避免 GPIO/PWM 同步操作导致主循环超过 100ms 后误熄灭。保留500ms点亮、松键1000ms后灭和真实采样失效保护。

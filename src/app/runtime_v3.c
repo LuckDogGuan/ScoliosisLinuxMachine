@@ -63,6 +63,7 @@ typedef struct {
     Config *config;
     int udp, paired, gate, keys, release_required, recording, stop_sent, revoking;
     int middle_fired, audio_result, audio_volume, camera_fault;
+    int prompt_reserved, prompt_fired;
     uint64_t recording_mono, stopped_mono, recovery_retry;
     cJSON *last_completed;
     char system_boot[64];
@@ -90,11 +91,16 @@ typedef struct {
     char upload_id[ID_SIZE];
     char sounds[8][32]; unsigned sound_in, sound_out;
     char speech_id[ID_SIZE]; uint64_t speech_lease, speech_resume;
+    char active_sound[32];
 } Runtime;
 static int request_unpair(Runtime *rt);
 static int begin_audio(Runtime *rt, const cJSON *request, int test);
 static void audio_messages(Runtime *rt);
+static void abort_worker(Worker *worker);
+static void cancel_capture_prompt(Runtime *rt);
 static void queue_sound(Runtime *rt, const char *name) {
+    if (strcmp(name,"capture_start") && strcmp(name,"capture_done") &&
+        strcmp(name,"capture_failed") && strcmp(name,"capture_short") && strcmp(name,"storage_low")) return;
     if (rt->sound_in - rt->sound_out >= 8) return;
     snprintf(rt->sounds[rt->sound_in++ % 8], 32, "%s", name);
 }
@@ -117,6 +123,7 @@ static void disable_gate(Runtime *rt) {
     rt->gate = 0;
     rt->lease = 0;
     rt->capture_id[0] = 0;
+    if (!rt->record.pid) { cancel_capture_prompt(rt); rt->release_required=1; }
     if (!rt->record.pid) COPY(rt->phase, "idle");
     if (was_enabled) queue_sound(rt, "capture_disabled");
 }
@@ -128,7 +135,7 @@ static int local_unpair(Runtime *rt) {
     int revoking = rt->revoking; rt->revoking = 0;
     if (save_pair(rt)) { rt->revoking = revoking; COPY(rt->host, previous); rt->unpair[0] = 0; return -1; }
     rt->paired = 0; rt->revoking = 0;
-    rt->speech_lease=0; rt->speech_id[0]=0; rt->speech_resume=v3_now()+600;
+    rt->speech_lease=0; rt->speech_id[0]=0; rt->speech_resume=v3_now()+200;
     disable_gate(rt);
     rt->candidate[0] = 0;
     rt->pair_window = 0;
@@ -286,6 +293,7 @@ static void notifier_messages(Runtime *rt) {
     } else if (!size) { finish_worker(&rt->notifier); rt->event_retry = v3_now() + 2000; }
 }
 static void start_record(Runtime *rt) {
+    rt->prompt_fired=0;
     long available, total;
     long expected = ((long)rt->config->bitrate_kbps * 60000 + 7999999) / 8000000;
     long threshold = 16 + 2 * expected;
@@ -317,7 +325,6 @@ static void start_record(Runtime *rt) {
         (void)send(fd, &result, sizeof(result), MSG_NOSIGNAL);
         close(fd); _exit(0);
     }
-    rt->sound_out = rt->sound_in;
     syslog(LOG_INFO, "V3 capture preparing %s", rt->current_id);
 }
 static void completed(Runtime *rt, const WorkerResult *result) {
@@ -392,7 +399,7 @@ static void record_messages(Runtime *rt) {
         } else if (result.type == 'S') {
             rt->recording = 1; rt->started_at = wall_ms();
             rt->recording_mono=v3_now(); rt->stopped_mono=0;
-            COPY(rt->phase, "recording"); queue_sound(rt,"capture_start");
+            COPY(rt->phase, "recording");
             instrument_trace("actual_recording",rt->current_id,rt->current_gate,rt->boot,"");
             syslog(LOG_INFO, "V3 actual recording %s", rt->current_id);
             /* Recording notification is persisted for maintenance worker, replaced at completion. */
@@ -494,10 +501,10 @@ static void worker_watchdog(Runtime *rt,uint64_t now) {
 static void maintenance(Runtime *rt, uint64_t now) {
     /* Prompt playback never queues behind network/storage maintenance. */
     if (rt->speech_lease && now >= rt->speech_lease) {
-        rt->speech_lease=0; rt->speech_id[0]=0; rt->speech_resume=now+600;
+        rt->speech_lease=0; rt->speech_id[0]=0; rt->speech_resume=now+200;
         instrument_trace("speech_expired","","",rt->boot,"");
     }
-    if (!rt->audio.pid && now >= rt->speech_lease && now >= rt->speech_resume && rt->sound_in!=rt->sound_out && strcmp(rt->phase,"starting")) {
+    if (!rt->audio.pid && now >= rt->speech_lease && now >= rt->speech_resume && rt->sound_in!=rt->sound_out) {
         char sound[32];COPY(sound,rt->sounds[rt->sound_out%8]);
         int fd;int branch=make_worker(&rt->audio,&fd);
         if (!branch) {
@@ -505,7 +512,7 @@ static void maintenance(Runtime *rt, uint64_t now) {
             WorkerResult result={.type='P',.result=audio_play(sound)};
             (void)send(fd,&result,sizeof(result),MSG_NOSIGNAL);close(fd);_exit(0);
         }
-        if (branch>0) rt->sound_out++;
+        if (branch!=0) { rt->sound_out++; COPY(rt->active_sound,sound); }
     }
     if (rt->maintenance.pid) {
         WorkerResult result; ssize_t size = recv(rt->maintenance.fd, &result, sizeof(result), MSG_DONTWAIT);
@@ -740,12 +747,13 @@ static cJSON *base_reply(Runtime *rt, const cJSON *request) {
 static void hello_reply(Runtime *rt, cJSON *reply, uint64_t now) {
     cJSON_ReplaceItemInObjectCaseSensitive(reply, "ok", cJSON_CreateTrue());
     cJSON *capabilities = cJSON_AddArrayToObject(reply, "capabilities");
-    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard", "backlight_brightness", "speech_focus"};
+    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard", "backlight_brightness", "speech_focus", "speech_preempt"};
     for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); i++) cJSON_AddItemToArray(capabilities, cJSON_CreateString(names[i]));
     cJSON_AddStringToObject(reply, "paired_host_id", rt->revoking ? "" : rt->host);
     cJSON_AddNumberToObject(reply, "volume", rt->audio_volume);
     cJSON_AddNumberToObject(reply, "saved_volume", rt->config->volume);
     cJSON_AddBoolToObject(reply,"speech_focus_active", now < rt->speech_lease);
+    cJSON_AddBoolToObject(reply,"speech_preempted",rt->prompt_reserved || rt->record.pid || rt->completion_pending);
     cJSON_AddBoolToObject(reply, "audio_busy", now < rt->speech_lease || rt->audio.pid || (rt->maintenance.pid && rt->maintenance_type == 'A') || rt->sound_in != rt->sound_out);
     cJSON_AddStringToObject(reply, "audio_operation_id", rt->audio_id);
     cJSON_AddNumberToObject(reply, "audio_operation_result", rt->audio_result);
@@ -862,15 +870,53 @@ static int begin_discard(Runtime *rt, const cJSON *request, cJSON *reply) {
     cJSON_AddStringToObject(reply,"error","discard_pending");
     return 0;
 }
+static void cancel_capture_prompt(Runtime *rt) {
+    if (!rt->record.pid && rt->prompt_fired) {
+        unsigned kept=rt->sound_out;
+        for (unsigned i=rt->sound_out;i<rt->sound_in;i++) {
+            if (strcmp(rt->sounds[i%8],"capture_start")) {
+                if (kept!=i) COPY(rt->sounds[kept%8],rt->sounds[i%8]);
+                kept++;
+            }
+        }
+        rt->sound_in=kept;
+        if (rt->audio.pid && !strcmp(rt->active_sound,"capture_start")) abort_worker(&rt->audio);
+    }
+    rt->hold_started=0; rt->prompt_reserved=rt->prompt_fired=0;
+}
+/* Reserve PC cancellation before the prompt; late readiness still preserves this ordering. */
+static int capture_gesture(Runtime *rt, uint64_t now) {
+    if (rt->keys != 5) { cancel_capture_prompt(rt); return 0; }
+    if (!rt->hold_started) rt->hold_started=now;
+    int eligible=now>=rt->diagnostics_lease && instrument_can_start(rt->release_required,rt->gate && now<rt->lease,
+        rt->capture_id[0]!=0,rt->camera_fault || rt->record.pid || rt->completion_pending || rt->notifier.pid,1200);
+    if (!eligible) {
+        if (!rt->record.pid && rt->prompt_reserved) { cancel_capture_prompt(rt); rt->release_required=1; }
+        return 0;
+    }
+    uint64_t held=now-rt->hold_started;
+    if (held>=800 && !rt->prompt_reserved) {
+        rt->prompt_reserved=1; rt->speech_lease=0; rt->speech_id[0]=0; rt->speech_resume=now+200;
+        rt->sound_out=rt->sound_in;
+        if (rt->audio.pid) abort_worker(&rt->audio);
+        instrument_trace("speech_preempted",rt->capture_id,rt->gate_id,rt->boot,"");
+    }
+    if (held>=1000 && !rt->prompt_fired) {
+        rt->prompt_fired=1; queue_sound(rt,"capture_start");
+        instrument_trace("capture_prompt",rt->capture_id,rt->gate_id,rt->boot,"");
+    }
+    return held>=1200 && now>=rt->speech_resume && rt->sound_in==rt->sound_out;
+}
 static int speech_focus(Runtime *rt, const cJSON *request, uint64_t now) {
     const char *id=str(request,"speech_id"), *action=str(request,"action");
     int ttl=(int)num(request,"ttl_ms");
     if (!safe_id(id)) return 0;
     if (!strcmp(action,"release")) {
         if (strcmp(id,rt->speech_id)) return 0;
-        rt->speech_lease=0; rt->speech_id[0]=0; rt->speech_resume=now+600;
+        rt->speech_lease=0; rt->speech_id[0]=0; rt->speech_resume=now+200;
         instrument_trace("speech_released","","",rt->boot,id); return 1;
     }
+    if (rt->prompt_reserved || rt->record.pid || rt->completion_pending) return 0;
     if (ttl<=0 || ttl>6000 || num(request,"ttl_ms")!=ttl) return 0;
     if (!strcmp(action,"renew")) {
         if (now>=rt->speech_lease || strcmp(id,rt->speech_id)) return 0;
@@ -1225,13 +1271,9 @@ int runtime_run(Config *config) {
         } else {
             rt.middle_hold = 0; rt.middle_fired = 0;
             if (!rt.keys) rt.release_required = 0;
-            if (rt.keys != 5) rt.hold_started = 0;
-            else {
-                if (!rt.hold_started) rt.hold_started = now;
-                if (instrument_can_start(rt.release_required, rt.gate && now < rt.lease,
-                    rt.capture_id[0] != 0, rt.camera_fault || rt.record.pid || rt.completion_pending || rt.notifier.pid, now - rt.hold_started)) start_record(&rt);
-            }
+            if (capture_gesture(&rt,now)) start_record(&rt);
         }
+        if (rt.keys != 5 || now < rt.diagnostics_lease) (void)capture_gesture(&rt,now);
         diagnostics_tick(&rt,now);
         record_messages(&rt);
         if (rt.completion_pending && !rt.record.pid && now >= rt.completion_retry) {
