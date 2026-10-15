@@ -9,7 +9,10 @@
 
 #include <stddef.h>
 
-#define INSTRUMENT_VERSION "3.3.12"
+#define INSTRUMENT_VERSION "3.3.13"
+#ifndef INSTRUMENT_BUILD
+#define INSTRUMENT_BUILD "development"
+#endif
 #ifndef INSTRUMENT_ROOT
 #define INSTRUMENT_ROOT "/opt/instrument"
 #endif

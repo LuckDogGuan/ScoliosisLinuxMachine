@@ -425,14 +425,15 @@ int http_v3_status(const Config *config, const cJSON *event) {
     return ok ? 0 : -1;
 }
 
-/* Diagnostic binary frames use the same bounded socket transport as videos. */
-int http_diagnostic_frame(const Config *config, const char *token, const char *path) {
-    FILE *file=fopen(path,"rb"); if(!file) return -1;
+/* Diagnostic frames retain transport evidence without changing video uploads. */
+int http_diagnostic_frame(const Config *config, const char *token, const char *path, cJSON *details) {
+    cJSON_AddStringToObject(details,"upload_state","failed");
+    FILE *file=fopen(path,"rb"); if(!file) {cJSON_AddNumberToObject(details,"upload_errno",errno);return -1;}
     struct stat st;
     if(fstat(fileno(file),&st) || st.st_size<4 || st.st_size>4194304) {fclose(file); return -1;}
     char host[64]; int fd=connect_pc(config,host,sizeof(host));
-    if(fd<0) {fclose(file); return -1;}
-    struct timeval timeout={.tv_sec=3};
+    if(fd<0) {int saved=errno;fclose(file);cJSON_AddNumberToObject(details,"upload_errno",saved);return -1;}
+    struct timeval timeout={.tv_sec=2};
     (void)setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
     (void)setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
     char header[768];
@@ -445,14 +446,21 @@ int http_diagnostic_frame(const Config *config, const char *token, const char *p
         if(count!=wanted || send_all(fd,chunk,count)) {ok=0; break;}
         remaining-=count;
     }
+    int saved=ok ? 0 : errno;
     fclose(file);
     char response[128]={0}; size_t length=0;
     while(ok && length<sizeof(response)-1 && !strstr(response,"\r\n")) {
         ssize_t count=recv(fd,response+length,sizeof(response)-1-length,0);
         if(count<0 && errno==EINTR) continue;
-        if(count<=0) {ok=0; break;}
+        if(count<=0) {saved=errno;ok=0; break;}
         length+=(size_t)count; response[length]=0;
     }
     close(fd);
-    return ok && (!strncmp(response,"HTTP/1.1 200 ",13) || !strncmp(response,"HTTP/1.0 200 ",13)) ? 0 : -1;
+    int status=0;
+    (void)sscanf(response,"HTTP/%*d.%*d %d",&status);
+    cJSON_AddNumberToObject(details,"http_status",status);
+    if(saved) cJSON_AddNumberToObject(details,"upload_errno",saved);
+    cJSON_DeleteItemFromObjectCaseSensitive(details,"upload_state");
+    cJSON_AddStringToObject(details,"upload_state",ok && status==200 ? "sent" : "failed");
+    return ok && status==200 ? 0 : -1;
 }

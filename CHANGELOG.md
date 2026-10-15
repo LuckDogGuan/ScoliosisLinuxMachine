@@ -1,3 +1,11 @@
+# 3.3.13 - Wi-Fi camera diagnostics (2026-10-15)
+
+- Normalize RKiPC storage mount to / at startup, matching VIDEO_DIR=/video0 and the capture spool filesystem.
+- Add diagnostics_health_v1 capability and round/boot/build-correlated stage/error/file/upload evidence.
+- Keep prior failures during background retries; cancel ended-round workers and bound diagnosis to 7.5 seconds.
+- Report storage path mismatch, snapshot RPC, JPEG completion and HTTP failures without touching the key loop.
+- Preserve original recordings and pairing; live Wi-Fi deployment and acceptance evidence is in the Windows Luckfox record.
+
 # Unreleased — hardware preflight (2026-10-15)
 
 - Add read-only sensor-driver recognition, RKiPC process and status-RPC checks to the existing diagnostics worker; publish health before preview acquisition and include age/preview status in authenticated diagnostic replies.

@@ -129,6 +129,8 @@ post_chk() {
 		cp -fa /oem/usr/share/image.bmp /userdata/
 	fi
 
+	# Keep RKiPC output on the same filesystem/path as the capture service.
+	sed -i 's|^mount_path[[:space:]]*=.*|mount_path = /|' "$rkipc_ini"
 	# Diagnostics request one JPEG at a time, never periodic snapshots.
 	sed -i 's/^enable_jpeg[[:space:]]*=.*/enable_jpeg = 1/; s/^enable_cycle_snapshot[[:space:]]*=.*/enable_cycle_snapshot = 0/; s/^jpeg_qfactor[[:space:]]*=.*/jpeg_qfactor = 95/; s/^jpeg_buffer_size[[:space:]]*=.*/jpeg_buffer_size = 4194304/' "$rkipc_ini"
 	mkdir -p /video0 /video1 /video2

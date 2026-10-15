@@ -138,22 +138,37 @@ int camera_capture_settings(int fps, int bitrate, int gop, CameraSettings *setti
     settings->bitrate=bitrate; settings->gop=gop; return 0;
 }
 
-/* Read only the new JPEG requested by this diagnostic operation. */
-int camera_diagnostic_frame(const Config *config, const char *token) {
+/* Only this operation's new JPEG may be uploaded or removed. */
+int camera_diagnostic_frame(const Config *config, const char *token, cJSON *details) {
+    uint64_t began=v3_now();
+    const char *code="video_dir_unavailable", *stage="storage";
+    int saved_errno=0;
     char existing[MAX_EXISTING][128]; int count=0;
+    char path[384]={0}; long previous=-1;
+    cJSON *preflight=cJSON_GetObjectItemCaseSensitive(details,"code");
+    if (cJSON_IsString(preflight) && strcmp(preflight->valuestring,"pending")) return -1;
     DIR *dir=opendir(VIDEO_DIR); struct dirent *entry;
-    if (!dir) { instrument_trace("diagnostics_camera", "", "", "", "video_dir_unavailable"); return -1; }
+    if (!dir) {saved_errno=errno;goto failed;}
     while ((entry=readdir(dir))) {
         if (!strstr(entry->d_name,".jpeg")) continue;
-        if(count>=MAX_EXISTING) {closedir(dir); return -1;}
+        if(count>=MAX_EXISTING) {closedir(dir);code="directory_inventory_full";goto failed;}
         snprintf(existing[count++],128,"%.127s",entry->d_name);
     }
     closedir(dir);
-    if (rpc_simple("rk_take_photo")) { instrument_trace("diagnostics_camera", "", "", "", "snapshot_rpc_failed"); return -1; }
+    stage="snapshot";
+    errno=0;
+    int photo_fd=rpc_open("rk_take_photo");
+    int32_t photo_result=-1;
+    int photo_read=photo_fd<0 ? -1 : read_all(photo_fd,&photo_result,sizeof(photo_result));
+    saved_errno=errno;
+    if(photo_fd>=0) close(photo_fd);
+    cJSON_AddNumberToObject(details,"snapshot_rpc_result",photo_result);
+    if(photo_read || photo_result) {code="snapshot_rpc_failed";goto failed;}
     uint64_t deadline=v3_now()+2000;
-    char path[384]={0}; long previous=-1;
+    code="jpeg_timeout";
     while(v3_now()<deadline) {
-        dir=opendir(VIDEO_DIR); if(!dir) return -1;
+        dir=opendir(VIDEO_DIR);
+        if(!dir) {saved_errno=errno;code="video_dir_unavailable";goto failed;}
         while((entry=readdir(dir))) {
             size_t length=strlen(entry->d_name);
             if(length<5 || strcmp(entry->d_name+length-5,".jpeg")) continue;
@@ -162,18 +177,39 @@ int camera_diagnostic_frame(const Config *config, const char *token) {
         }
         closedir(dir);
         if(path[0]) {
-            struct stat st; unsigned char end[2]; int fd=open(path,O_RDONLY|O_CLOEXEC);
-            int complete=fd>=0 && !fstat(fd,&st) && st.st_size>=4 && st.st_size<=4194304 &&
-                st.st_size==previous && lseek(fd,-2,SEEK_END)>=0 && read(fd,end,2)==2 && end[0]==255 && end[1]==217;
-            if(fd>=0) close(fd);
+            struct stat st; unsigned char start[2],end[2]; int fd=open(path,O_RDONLY|O_CLOEXEC);
+            if(fd<0) {saved_errno=errno;code="jpeg_read_failed";goto failed;}
+            int complete=!fstat(fd,&st) && st.st_size>=4 && st.st_size<=4194304 &&
+                st.st_size==previous && read(fd,start,2)==2 && start[0]==255 && start[1]==216 &&
+                lseek(fd,-2,SEEK_END)>=0 && read(fd,end,2)==2 && end[0]==255 && end[1]==217;
+            close(fd);
             if(complete) {
-                int result=http_diagnostic_frame(config,token,path); instrument_trace("diagnostics_camera", "", "", "", result ? "http_failed" : "http_sent"); (void)unlink(path); return result;
+                cJSON_AddNumberToObject(details,"file_bytes",(double)st.st_size);
+                cJSON_AddStringToObject(details,"file_state","complete");
+                int result=http_diagnostic_frame(config,token,path,details);
+                saved_errno=0;
+                (void)unlink(path);
+                stage="upload";code=result ? "frame_upload_failed" : "ok";
+                goto finished;
             }
             if(!stat(path,&st)) previous=st.st_size;
+            code="jpeg_incomplete";
         }
         struct timespec pause={.tv_nsec=50000000}; nanosleep(&pause,NULL);
     }
-    instrument_trace("diagnostics_camera", "", "", "", path[0] ? "jpeg_incomplete" : "jpeg_timeout");
+failed:
     if(path[0]) (void)unlink(path);
-    return -1;
+finished:
+    if(previous>=0 && !cJSON_GetObjectItemCaseSensitive(details,"file_bytes"))
+        cJSON_AddNumberToObject(details,"file_bytes",previous);
+    if(!cJSON_GetObjectItemCaseSensitive(details,"file_state"))
+        cJSON_AddStringToObject(details,"file_state",path[0] ? "incomplete" : "not_created");
+    cJSON_DeleteItemFromObjectCaseSensitive(details,"code");
+    cJSON_DeleteItemFromObjectCaseSensitive(details,"stage");
+    cJSON_AddStringToObject(details,"code",code);
+    cJSON_AddStringToObject(details,"stage",stage);
+    cJSON_AddNumberToObject(details,"elapsed_ms",(double)(v3_now()-began));
+    if(saved_errno && strcmp(code,"ok")) cJSON_AddNumberToObject(details,"errno",saved_errno);
+    instrument_trace("diagnostics_camera","","","",code);
+    return !strcmp(code,"ok") ? 0 : -1;
 }

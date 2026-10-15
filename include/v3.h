@@ -15,7 +15,7 @@ int http_v3_start(const Config *config, const char *id, const char *gate, const 
 int http_v3_status(const Config *config, const cJSON *event);
 int v3_save_json(const char *path, const cJSON *value);
 cJSON *v3_read_json(const char *path);
-int camera_diagnostic_frame(const Config *config, const char *token);
+int camera_diagnostic_frame(const Config *config, const char *token, cJSON *details);
 #endif
 
-int http_diagnostic_frame(const Config *config, const char *token, const char *path);
+int http_diagnostic_frame(const Config *config, const char *token, const char *path, cJSON *details);

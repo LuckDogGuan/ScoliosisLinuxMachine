@@ -1,6 +1,7 @@
 CC = /home/guanjx/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-gcc
 TARGET = instrument_app
 CFLAGS += -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O2
+CFLAGS += -DINSTRUMENT_BUILD='"$(shell git rev-parse --short=12 HEAD)"'
 CFLAGS += -Iinclude -Ithird_party/cjson -Ithird_party/lwbtn/include
 
 # Application policy -> middleware services -> Linux/Luckfox platform adapters
