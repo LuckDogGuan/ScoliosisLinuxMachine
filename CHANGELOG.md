@@ -1,3 +1,11 @@
+# Unreleased - restore essential device prompts (2026-10-15)
+
+- Restore boot_ready, wifi_connected, wifi_disconnected and wifi_restored through the shared prompt whitelist; retain the existing WAV assets and volume.
+- Announce disconnect only when a previously available network becomes unavailable. Offline startup, repeated recovery polls and PC unpair do not create extra disconnect announcements.
+- Keep prompt playback in its existing independent worker; preserve capture priority, PC speech leases and capture continuation on playback failure.
+- Host startup/network transition regressions, audio-isolation/failure/speech-focus checks and ARM build passed. Code only: no package, version bump, deployment or physical audio acceptance.
+- Details: validation/startup-network-prompts-20261015.md.
+
 # 3.3.13 - Wi-Fi camera diagnostics (2026-10-15)
 
 - Normalize RKiPC storage mount to / at startup, matching VIDEO_DIR=/video0 and the capture spool filesystem.

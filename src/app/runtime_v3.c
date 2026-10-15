@@ -102,8 +102,11 @@ static void audio_messages(Runtime *rt);
 static void abort_worker(Worker *worker);
 static void cancel_capture_prompt(Runtime *rt);
 static void queue_sound(Runtime *rt, const char *name) {
+    /* Keep essential device/network feedback; background upload/gate changes stay quiet. */
     if (strcmp(name,"capture_start") && strcmp(name,"capture_done") &&
-        strcmp(name,"capture_failed") && strcmp(name,"capture_short") && strcmp(name,"storage_low")) return;
+        strcmp(name,"capture_failed") && strcmp(name,"capture_short") && strcmp(name,"storage_low") &&
+        strcmp(name,"boot_ready") && strcmp(name,"wifi_connected") &&
+        strcmp(name,"wifi_disconnected") && strcmp(name,"wifi_restored")) return;
     if (rt->sound_in - rt->sound_out >= 8) return;
     snprintf(rt->sounds[rt->sound_in++ % 8], 32, "%s", name);
 }
@@ -527,14 +530,15 @@ static void maintenance(Runtime *rt, uint64_t now) {
                 rt->metrics_at = result.started_at;
                 rt->gateway_failures = result.gateway > 0 ? 0 : rt->gateway_failures + 1;
                 int transition = strcmp(rt->wifi_state, result.wifi_state);
+                int was_available = !strcmp(rt->wifi_state, "available");
                 int first_wifi = !rt->wifi_seen;
                 if (result.gateway > 0) rt->wifi_seen = 1;
                 COPY(rt->wifi_state, result.wifi_state);
                 char detail[160]; snprintf(detail,sizeof(detail),"gateway=%d wifi=%d failures=%d state=%s initial=%d",result.gateway,result.wifi,rt->gateway_failures,rt->wifi_state,first_wifi);
                 instrument_trace("network_snapshot","","",rt->boot,detail);
                 if (transition) {
-                    if (!strcmp(rt->wifi_state, "recovering")) queue_sound(rt, "wifi_recovering");
-                    if (!strcmp(rt->wifi_state, "needs_attention")) queue_sound(rt, "wifi_attention");
+                    /* One disconnect per outage; retries and offline startup are not new outages. */
+                    if (was_available && result.gateway <= 0) queue_sound(rt, "wifi_disconnected");
                     if (!strcmp(rt->wifi_state, "available")) queue_sound(rt, first_wifi ? "wifi_connected" : "wifi_restored");
                 }
                 for (int i = 0; i < result.count; i++) {
