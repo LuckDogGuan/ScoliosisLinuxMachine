@@ -86,6 +86,9 @@ typedef struct {
     char diagnostics_id[ID_SIZE];
     int backlight_brightness, diagnostics_brightness;
     Worker diagnostics;
+    char diagnostics_health[512];
+    uint64_t diagnostics_checked_at;
+    int diagnostics_preview;
     Worker record, upload, maintenance, notifier, audio, discard;
     char maintenance_type;
     char upload_id[ID_SIZE];
@@ -928,6 +931,16 @@ static int speech_focus(Runtime *rt, const cJSON *request, uint64_t now) {
     COPY(rt->speech_id,id); rt->speech_lease=now+(unsigned)ttl;
     instrument_trace("speech_acquired","","",rt->boot,id); return 1;
 }
+static void diagnostics_health_reply(Runtime *rt, cJSON *reply, uint64_t now) {
+    cJSON *health=rt->diagnostics_health[0] ? cJSON_Parse(rt->diagnostics_health) : cJSON_CreateObject();
+    if (!health) return;
+    int light=platform_backlight_health();
+    cJSON_AddStringToObject(health,"backlight_connection","not_observable");
+    cJSON_AddStringToObject(health,"backlight_control",light<0 ? "unavailable_test" : light ? "ready" : "unavailable");
+    cJSON_AddNumberToObject(health,"age_ms",rt->diagnostics_checked_at ? (double)(now-rt->diagnostics_checked_at) : -1);
+    cJSON_AddStringToObject(health,"preview_result",rt->diagnostics_preview>0 ? "success" : rt->diagnostics_preview<0 ? "failed" : "pending");
+    cJSON_AddItemToObject(reply,"hardware_health",health);
+}
 static void receive_udp(Runtime *rt, uint64_t now) {
     for (int packets = 0; packets < 16; packets++) {
         char buffer[PACKET_SIZE + 1]; struct sockaddr_in source = {0}; socklen_t source_length = sizeof(source);
@@ -1051,14 +1064,17 @@ static void receive_udp(Runtime *rt, uint64_t now) {
             if (!success) cJSON_AddStringToObject(reply,"error","backlight_unavailable_or_invalid");
             cJSON_AddNumberToObject(reply,"brightness",rt->diagnostics_brightness);
             cJSON_AddNumberToObject(reply,"saved_brightness",rt->backlight_brightness);
+            diagnostics_health_reply(rt,reply,now);
         } else if (!strcmp(op, "diagnostics_start")) {
             const char *id = str(request,"diagnostics_id"); int ttl=(int)num(request,"ttl_ms");
             if (!rt->gate && !rt->record.pid && !rt->completion_pending && !rt->upload.pid && !rt->diagnostics.pid && safe_id(id) && ttl>0 && ttl<=6000) {
+                rt->diagnostics_health[0]=0; rt->diagnostics_checked_at=0; rt->diagnostics_preview=0;
                 rt->diagnostics_brightness=0; COPY(rt->diagnostics_id,id); rt->diagnostics_lease=now+(unsigned)ttl; rt->diagnostics_next=now;
                 rt->hold_started=rt->middle_hold=0; rt->release_required=1; success=1;
             }
             cJSON_AddNumberToObject(reply,"brightness",rt->diagnostics_brightness);
             cJSON_AddNumberToObject(reply,"saved_brightness",rt->backlight_brightness);
+            diagnostics_health_reply(rt,reply,now);
         } else if (!strcmp(op,"diagnostics_renew") || !strcmp(op,"diagnostics_status") || !strcmp(op,"diagnostics_end")) {
             int ttl=(int)num(request,"ttl_ms");
             if (!strcmp(rt->diagnostics_id,str(request,"diagnostics_id")) && now < rt->diagnostics_lease) {
@@ -1068,6 +1084,7 @@ static void receive_udp(Runtime *rt, uint64_t now) {
             }
             cJSON_AddNumberToObject(reply,"brightness",rt->diagnostics_brightness);
             cJSON_AddNumberToObject(reply,"saved_brightness",rt->backlight_brightness);
+            diagnostics_health_reply(rt,reply,now);
             cJSON_AddNumberToObject(reply,"key_mask",rt->keys);
             cJSON_AddNumberToObject(reply,"remaining_ms",rt->diagnostics_lease>now ? (double)(rt->diagnostics_lease-now) : 0);
         } else if (!strcmp(op, "unpair")) {
@@ -1153,12 +1170,17 @@ static void discard_messages(Runtime *rt) {
         cJSON_Delete(receipt);
     }
 }
+typedef struct { char type; int result; char health[512]; } DiagnosticsResult;
 static void diagnostics_tick(Runtime *rt, uint64_t now) {
     if (rt->diagnostics.pid) {
-        WorkerResult result; ssize_t size=recv(rt->diagnostics.fd,&result,sizeof(result),MSG_DONTWAIT);
-        if (size==(ssize_t)sizeof(result) || size==0) {
+        DiagnosticsResult result={0};
+        ssize_t size=recv(rt->diagnostics.fd,&result,sizeof(result),MSG_DONTWAIT);
+        if (size==(ssize_t)sizeof(result) && result.type=='H') {
+            COPY(rt->diagnostics_health,result.health); rt->diagnostics_checked_at=now;
+        } else if (size==(ssize_t)sizeof(result) || size==0) {
+            rt->diagnostics_preview=size==(ssize_t)sizeof(result) && !result.result ? 1 : -1;
             finish_worker(&rt->diagnostics);
-            instrument_trace("diagnostics_frame","","",rt->boot,size==(ssize_t)sizeof(result) && !result.result ? "success" : "failed");
+            instrument_trace("diagnostics_frame","","",rt->boot,rt->diagnostics_preview>0 ? "success" : "failed");
         }
         return;
     }
@@ -1167,7 +1189,10 @@ static void diagnostics_tick(Runtime *rt, uint64_t now) {
     int fd; int branch=make_worker(&rt->diagnostics,&fd);
     if (!branch) {
         child_isolate(rt,fd);
-        WorkerResult result={.result=camera_diagnostic_frame(rt->config,rt->diagnostics_id)};
+        DiagnosticsResult result={.type='H'};
+        camera_diagnostic_health(result.health,sizeof(result.health));
+        (void)send(fd,&result,sizeof(result),MSG_NOSIGNAL);
+        result.type='D'; result.result=camera_diagnostic_frame(rt->config,rt->diagnostics_id);
         (void)send(fd,&result,sizeof(result),MSG_NOSIGNAL); close(fd); _exit(0);
     }
 }

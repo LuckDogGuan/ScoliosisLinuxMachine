@@ -21,6 +21,7 @@ static void tick(uint64_t ms,int keys,int allowed,int expected) {
     assert(backlight_tick(ms,keys,allowed)==0);assert(read_level()==expected);
 }
 int main(void) {
+    assert(platform_backlight_health()==0);
     assert(light_status_tick(0,10000)==0);
     tick(10000,5,1,0);tick(10010,0,1,0); /* startup hold disarmed */
     tick(10020,5,1,0);
@@ -50,6 +51,14 @@ int main(void) {
             assert(read_level()==(percent==100));
         }
     }
+    assert(platform_backlight_health()==1);
+    assert(gpio_write(55,"value","0")==0);assert(platform_backlight_health()==0);
+    assert(gpio_write(55,"value","1")==0);assert(platform_backlight_health()==1);
+    assert(platform_backlight_percent(37)==0);assert(platform_backlight_health()==1);
+    assert(pwm_write(backlight_chip,"enable",0)==0);assert(platform_backlight_health()==0);
+    assert(pwm_write(backlight_chip,"enable",1)==0);assert(platform_backlight_health()==1);
+    assert(pwm_write(backlight_chip,"duty_cycle",0)==0);assert(platform_backlight_health()==0);
+    assert(pwm_write(backlight_chip,"duty_cycle",PERIOD_NS*63/100)==0);
     platform_backlight_configure(37); assert(platform_backlight_set(1)==0);
     assert(backlight_level==37); assert(platform_backlight_set(0)==0); assert(backlight_level==0);
     light_status_close();assert(read_level()==0);

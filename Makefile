@@ -12,6 +12,7 @@ SOURCES = \
 	src/platform/trace.c \
 	src/platform/luckfox_gpio.c \
 	src/platform/luckfox_camera.c \
+	src/platform/diagnostics_health.c \
 	src/app/runtime_v3.c \
 	src/middleware/persistence.c \
 	src/platform/clock.c \

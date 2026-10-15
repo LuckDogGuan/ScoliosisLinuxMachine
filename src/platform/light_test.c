@@ -343,6 +343,27 @@ int platform_backlight_percent(int percent) {
     backlight_level = percent;
     return 0;
 }
+/* No lamp-presence feedback exists; this only checks the owned control output. */
+int platform_backlight_health(void) {
+    if (getenv("INSTRUMENT_HOST_TEST")) return -1;
+    if (status_light.lock<0 || backlight_level<0) return 0;
+    char path[512]; long value, period, duty_cycle;
+    if (backlight_pwm) snprintf(path,sizeof(path),"%s/pwm0/enable",backlight_chip);
+    else if (backlight_owned) snprintf(path,sizeof(path),"%s/class/gpio/gpio55/value",sysroot());
+    else return 0;
+    FILE *file=fopen(path,"r");
+    int ok=file && fscanf(file,"%ld",&value)==1;
+    if (file) fclose(file);
+    if (!ok) return 0;
+    if (!backlight_pwm) return value==(backlight_level>0);
+    if (value!=1) return 0;
+    snprintf(path,sizeof(path),"%s/pwm0/period",backlight_chip); file=fopen(path,"r");
+    ok=file && fscanf(file,"%ld",&period)==1; if (file) fclose(file);
+    if (!ok || period!=PERIOD_NS) return 0;
+    snprintf(path,sizeof(path),"%s/pwm0/duty_cycle",backlight_chip); file=fopen(path,"r");
+    ok=file && fscanf(file,"%ld",&duty_cycle)==1; if (file) fclose(file);
+    return ok && duty_cycle==PERIOD_NS*(100-backlight_level)/100;
+}
 int platform_backlight_set(int on) {
     return platform_backlight_percent(on ? backlight_brightness : 0);
 }

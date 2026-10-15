@@ -29,6 +29,17 @@ try:
     assert not ask('diagnostics_backlight',diagnostics_id='diag',brightness=50)['ok']
     reply=ask('diagnostics_start',diagnostics_id='diag',ttl_ms=5000)
     assert reply['ok'] and reply['brightness']==0 and reply['saved_brightness']==100,reply
+    assert reply['hardware_health']['backlight_connection']=='not_observable',reply
+    assert reply['hardware_health']['backlight_control']=='unavailable_test',reply
+    for _ in range(40):
+        reply=ask('diagnostics_renew',diagnostics_id='diag',ttl_ms=5000)
+        health=reply['hardware_health']
+        if health.get('camera_sensor'):break
+        time.sleep(.05)
+    assert health.get('camera_sensor') in ('detected','not_detected','unavailable'),reply
+    assert health['camera_service'] in ('running','stopped','unavailable'),reply
+    assert health['camera_rpc'] in ('ready','unavailable') and health['age_ms']>=0,reply
+
     for value in [-1,101,0.5]:assert not ask('diagnostics_backlight',diagnostics_id='diag',brightness=value)['ok']
     assert not ask('diagnostics_backlight',diagnostics_id='wrong',brightness=50)['ok']
     for value in [0,1,25,50,75,99,100]:

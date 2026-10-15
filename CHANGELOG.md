@@ -1,3 +1,10 @@
+# Unreleased — hardware preflight (2026-10-15)
+
+- Add read-only sensor-driver recognition, RKiPC process and status-RPC checks to the existing diagnostics worker; publish health before preview acquisition and include age/preview status in authenticated diagnostic replies.
+- Expose GPIO55/PWM11 control readback; explicitly report lamp-presence as not observable. Host-test output never claims physical hardware success. No automatic restart or detection-triggered lamp changes.
+- Keep diagnostic leases, identity checks, saved brightness and independent key sampling. ARM build and host fixture/UDP/backlight/stability/input-isolation/latency tests passed; physical disconnect, optics and cold-boot acceptance remain pending. No package, version bump, deployment or tag in this change.
+- Details: validation/hardware-preflight-20261015.md; Windows evidence: Luckfox/调试/记录/hardware-preflight-20261015/.
+
 # 3.3.12 (2026-10-14)
 
 - Keep 500 ms backlight and 1000 ms release-off delay. Reserve PC speech handover at 800 ms; announce capture once at 1000 ms; request recording from 1200 ms only while the authorized dual-button gesture remains valid.
