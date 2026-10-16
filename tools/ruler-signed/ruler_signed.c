@@ -210,7 +210,8 @@ RS_API int rs_analyze_gray8(rs_context *c,const uint8_t *im,int width,int height
     if(!c||!im||stride<width)return finish(r,-1,-1,0);
     if(width!=IW||height!=IH){status=finish(r,1,1,0);goto done;}
     status=right(c,im,stride,r);
-    if(status==0||r->reason==2||(isfinite(r->point_x)&&r->point_x>=300))goto done;
+    if(status==0||r->reason==2)goto done;
+    if(isfinite(r->point_x)&&r->point_x>=300){r->branch=3;goto done;}
     left_feature(c,im,stride);
     int first=-1,second=-1;
     for(uint32_t j=0;j<c->nr;j++) {
