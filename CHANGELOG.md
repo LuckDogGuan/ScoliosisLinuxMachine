@@ -1,3 +1,11 @@
+# 3.3.15 - restore existing event voice policy (2026-10-16)
+
+- Remove the global queue_sound whitelist introduced in f94bea2 (3.3.12). Existing pairing, capture-enable/disable, upload and storage event prompts can enter the queue again; do not silently redefine the agreed voice policy during timing optimizations.
+- The PC "start capture from this position" action already sends capture_enable. Restoring its capture_enabled prompt requires no PC changes or duplicate new prompt.
+- Retain the eight-entry capacity guard, independent playback worker, speech handover/preemption, idempotent RPC replies and capture continuation on audio failure. No WAV/volume or camera configuration changes.
+- Regression coverage checks all 22 existing assets, actual UDP pair/enable/renew/disable/unpair prompts, no repeated speech for duplicate/unauthorized RPCs, and capture rhythm with restored event prompts.
+- Hardware deployment and observable playback evidence are recorded separately.
+
 # 3.3.14 - restore essential device prompts (2026-10-16)
 
 - Restore boot_ready, wifi_connected, wifi_disconnected and wifi_restored through the shared prompt whitelist; retain the existing WAV assets and volume.

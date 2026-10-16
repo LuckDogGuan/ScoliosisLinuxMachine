@@ -26,15 +26,24 @@ int main(int argc,char **argv) {
     Config config={.volume=20};
     Runtime rt={.config=&config,.udp=-1};
     COPY(rt.wifi_state,"unknown");
+    if (argc>1 && !strcmp(argv[1],"assets")) {
+        assert(argc>2);
+        for(int i=2;i<argc;i++) { queue_sound(&rt,argv[i]); expect_sound(&rt,argv[i]); }
+        for(int i=0;i<8;i++) queue_sound(&rt,"pair_success");
+        queue_sound(&rt,"capture_enabled");
+        assert(rt.sound_in-rt.sound_out==8); /* Capacity protection remains. */
+        puts("PASS: every existing voice asset is queueable; capacity stays bounded");
+        return 0;
+    }
     if (argc>1 && !strcmp(argv[1],"boot")) {
         queue_sound(&rt,"boot_ready"); expect_sound(&rt,"boot_ready");
         const char *capture[]={"capture_start","capture_done","capture_failed","capture_short","storage_low"};
         for(size_t i=0;i<sizeof(capture)/sizeof(capture[0]);i++) {
             queue_sound(&rt,capture[i]); expect_sound(&rt,capture[i]);
         }
-        queue_sound(&rt,"uploaded"); queue_sound(&rt,"saved");
-        assert(rt.sound_in==rt.sound_out);
-        puts("PASS: startup and capture prompts accepted; background upload remains quiet");
+        queue_sound(&rt,"uploaded"); expect_sound(&rt,"uploaded");
+        queue_sound(&rt,"saved_on_device"); expect_sound(&rt,"saved_on_device");
+        puts("PASS: startup, capture and existing upload/storage event prompts accepted");
         return 0;
     }
     snapshot(&rt,"unknown",0);

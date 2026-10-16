@@ -1,4 +1,5 @@
 """Run actual prompt policy and maintenance transitions without board access."""
+import json
 import pathlib
 import subprocess
 import tempfile
@@ -15,5 +16,9 @@ subprocess.run(["gcc", "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-D_DEFAULT_SOUR
                 "-Wl,--gc-sections", "-o", str(evidence / "check")], cwd=root, check=True)
 results = [subprocess.run([str(evidence / "check"), mode], timeout=10).returncode
            for mode in ("boot", "network")]
+assets = json.loads((root / "sounds/stability-voice-manifest.json").read_text())["files"]
+names = [pathlib.Path(row["file"]).stem for row in assets]
+assert len(names) == len(set(names)) == 22
+results.append(subprocess.run([str(evidence / "check"), "assets", *names], timeout=10).returncode)
 print("Evidence:", evidence, flush=True)
-assert results == [0, 0], results
+assert results == [0, 0, 0], results

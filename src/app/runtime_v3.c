@@ -102,11 +102,6 @@ static void audio_messages(Runtime *rt);
 static void abort_worker(Worker *worker);
 static void cancel_capture_prompt(Runtime *rt);
 static void queue_sound(Runtime *rt, const char *name) {
-    /* Keep essential device/network feedback; background upload/gate changes stay quiet. */
-    if (strcmp(name,"capture_start") && strcmp(name,"capture_done") &&
-        strcmp(name,"capture_failed") && strcmp(name,"capture_short") && strcmp(name,"storage_low") &&
-        strcmp(name,"boot_ready") && strcmp(name,"wifi_connected") &&
-        strcmp(name,"wifi_disconnected") && strcmp(name,"wifi_restored")) return;
     if (rt->sound_in - rt->sound_out >= 8) return;
     snprintf(rt->sounds[rt->sound_in++ % 8], 32, "%s", name);
 }
