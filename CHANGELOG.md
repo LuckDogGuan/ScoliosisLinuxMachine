@@ -1,3 +1,10 @@
+# Unreleased - Windows formal-video R4 C DLL (2026-10-16)
+
+- Add an independent C11 signed-reference core under tools/ruler-signed; retain the existing preview reader and all firmware services unchanged.
+- Export versioned load/analyze-gray/analyze-PNG/free ABI, bounded parameter loading and Windows system-WIC PNG input without Python/OpenCV runtime dependencies.
+- Preserve the frozen round-four right-edge/local-shadow algorithm, float32 reductions, exact grayscale rule and explicit invalid results. Windows Flutter owns the serialized background FFI worker and model package.
+- Full and four-fold reference parity, Windows runtime/packaging, timing and Python-free dependency evidence are recorded in the Windows Luckfox ruler-native-r4-20261016 audit. Linux ASan/UBSan boundary tests passed. No board deployment or firmware version bump.
+
 # 3.3.15 - restore existing event voice policy (2026-10-16)
 
 - Remove the global queue_sound whitelist introduced in f94bea2 (3.3.12). Existing pairing, capture-enable/disable, upload and storage event prompts can enter the queue again; do not silently redefine the agreed voice policy during timing optimizations.
