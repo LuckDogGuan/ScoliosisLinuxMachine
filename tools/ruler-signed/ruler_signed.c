@@ -171,9 +171,7 @@ static int right(rs_context *c,const uint8_t *im,int stride,rs_result *r) {
     if(best<60)return finish(r,1,3,1);
     r->point_x=best_right*2+100;r->point_y=hist_median(best_hist,RH,best_count)*2+80;
     double x=r->point_x;
-    int extrapolate=x>c->ax[c->na-1];
-    /* A clipped ROI border is background, never an extrapolation anchor. */
-    if(x<c->ax[0]||(extrapolate&&(x>=1096||r->point_y<=82)))return finish(r,1,4,3);
+    if(x<c->ax[0]||x>c->ax[c->na-1])return finish(r,1,4,3);
     int near_count=0;double low=1000,high=-1000;
     for(uint32_t i=0;i<c->na;i++)if(fabs(c->ax[i]-x)<=6){near_count++;if(c->ay[i]<low)low=c->ay[i];if(c->ay[i]>high)high=c->ay[i];}
     if(near_count>1&&high-low>.75)return finish(r,1,5,1);
@@ -186,9 +184,7 @@ static int right(rs_context *c,const uint8_t *im,int stride,rs_result *r) {
     for(int i=1;i<nu;i++)if(c->uy[i]-c->uy[i-1]<-.75)return finish(r,1,6,1);
     double value=c->uy[nu-1];
     for(int i=1;i<nu;i++)if(x<=c->ux[i]){value=c->uy[i-1]+(x-c->ux[i-1])*(c->uy[i]-c->uy[i-1])/(c->ux[i]-c->ux[i-1]);break;}
-    if(extrapolate&&nu<2)return finish(r,1,6,1);
-    if(extrapolate)value=c->uy[nu-1]+(x-c->ux[nu-1])*(c->uy[nu-1]-c->uy[nu-2])/(c->ux[nu-1]-c->ux[nu-2]);
-    r->angle_deg=value;return finish(r,0,extrapolate?10:0,1);
+    r->angle_deg=value;return finish(r,0,0,1);
 }
 /* INTER_AREA uint8 path: separable float32 weighted accumulation. */
 static void left_feature(rs_context *c,const uint8_t *im,int stride) {
@@ -215,8 +211,7 @@ RS_API int rs_analyze_gray8(rs_context *c,const uint8_t *im,int width,int height
     if(width!=IW||height!=IH){status=finish(r,1,1,0);goto done;}
     status=right(c,im,stride,r);
     if(status==0||r->reason==2)goto done;
-    int recover_border=r->reason==4&&(r->point_x>=1096||r->point_y<=82);
-    if(isfinite(r->point_x)&&r->point_x>=300&&!recover_border){r->branch=3;goto done;}
+    if(isfinite(r->point_x)&&r->point_x>=300){r->branch=3;goto done;}
     left_feature(c,im,stride);
     int first=-1,second=-1;
     for(uint32_t j=0;j<c->nr;j++) {
@@ -227,12 +222,11 @@ RS_API int rs_analyze_gray8(rs_context *c,const uint8_t *im,int width,int height
         else if(second<0||dist<c->distances[second])second=(int)j;
     }
     r->point_x=NAN;r->point_y=NAN;
-    /* Best-effort recovery is explicitly estimated; retain a finite fit cap. */
-    if(c->distances[first]>c->limit*(recover_border?2.0:1.0)){status=finish(r,1,7,2);goto done;}
+    if(c->distances[first]>c->limit){status=finish(r,1,7,2);goto done;}
     if(fabs(c->labels[first]-c->labels[second])>c->span){status=finish(r,1,8,2);goto done;}
     double d0=c->distances[first],d1=c->distances[second];
     double w0=1.0/(d0*d0+1e-7),w1=1.0/(d1*d1+1e-7);
-    r->angle_deg=(w0*c->labels[first]+w1*c->labels[second])/(w0+w1);status=finish(r,0,recover_border?10:9,2);
+    r->angle_deg=(w0*c->labels[first]+w1*c->labels[second])/(w0+w1);status=finish(r,0,9,2);
 done:
     r->elapsed_ms=now_ms()-begin;return status;
 }

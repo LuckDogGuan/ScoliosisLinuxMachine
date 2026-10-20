@@ -19,3 +19,7 @@ Validation evidence: Windows Luckfox/调试/记录/ruler-native-r4-20261016. Ful
 Reason 10 with status 0 is an estimated reading, never a trusted measured sample. An interior right-edge point beyond the final calibration anchor uses the final distinct-anchor slope. A component clipped at x>=1096 or y<=82 must not be extrapolated: on prior range reason 4 it may try the existing local reference matcher with a finite 2x distance cap and the unchanged 1-degree neighbor agreement gate. Other mismatch/brightness checks remain. This 2x cap is a display recovery heuristic, not a new accuracy validation. A severely dissimilar frame still returns no angle.
 
 The Flutter caller preserves the estimate provenance in the input-image metadata, persists raw/beautified data separately, excludes estimates from recognized coverage and leaves estimate-only screening decisions pending review. The model is unchanged. The user-reported possible global +1-degree label offset is recorded as pending and is not applied. No board code was deployed or flashed.
+
+## Native v3 frozen round-four policy (2026-10-20)
+
+User explicitly selected the finalized fourth-round model directory. Restore the a48517a C decisions (equivalent to frozen Python), including original range rejection and unchanged local-neighbor gate. Remove v2 right-edge extrapolation and doubled-distance border recovery. Keep v2 history and packages. Windows runtime is ruler-signed-r4-native-v3; model parameters are byte-identical to the frozen round-four export. No firmware behavior changes in this policy update.
