@@ -1,19 +1,24 @@
-# Reference-template C candidate (not released)
+# Original 100-backlight Python matcher in C (desktop only)
 
-Source of truth: tools/ruler-template in the authoritative WSL Scoliosis repository.
-Windows build: ScoliosisFlutter/tool/build_template_reader.ps1.
-The resulting ruler_signed.dll uses the existing ABI 1 header in tools/ruler-signed.
-The old signed reader and firmware are unchanged.
+2026-10-20: supersedes the earlier 65 candidate's accuracy gate for this
+strict Python reproduction. Production 65 reader/model remain byte-identical.
+C/Python parity, pixel/ROI and fixed input adaptation are the acceptance gates;
+this does not claim accuracy on independently acquired 1280x1080 images.
 
-This ports test.py's grayscale ROI, brightness least squares, coarse reference
-comparison and adjacent-angle 0.01 mixture search. Duplicate-angle references are
-retained separately. Centered dot products and a precomputed Gram matrix eliminate
-repeated per-pixel least-squares solves without changing the search. scoliosis.py's
-gray data and look.py's bottom-origin coordinates are available from the gray and
-inspect commands. WIC JPEG/PNG decoding and RGB-to-gray integers run in C. No
-Python, NumPy, OpenCV or external runtime is needed for training or reading.
-The gray command exports lossless PGM pixels (no Excel dependency or GUI).
-Python is used only by the separate comparison/audit harness.
+The 100 runtime trains from the original 21 images (-10..10) at 640x480.
+ROI is top-origin (0,0,640,260), equivalent to bottom-origin y=220..480.
+A 1280x1080 input is converted by fixed nearest-neighbour indexing:
+  gray640[y,x] = input1080[floor(y*1080/480), floor(x*1280/640)]
+Native 640x480 is also accepted for Python parity checks.
+No scene-residual cutoff, sign heuristic or other measurement algorithm is added.
+Constant inputs still reject rather than returning a fabricated zero.
+
+Public ABI: existing rs_* for context lifecycle and reading; ruler_template.h
+adds rt_gray_w (query dimensions, then copy gray pixels), rt_roi_w (bottom-origin
+rectangle) and rt_pixel_w (single pixel, bottom-origin coordinates). The C CLI
+provides train/predict/gray/inspect. Runtime has no Python/OpenCV dependency.
+Windows orchestration: tool/build_template_reader.ps1 and tool/prepare_ruler100.py
+in ScoliosisFlutter; the latter invokes C training and records source/image hashes.
 
 Commands (Windows, Unicode paths supported):
   ruler_template.exe train inputs.tsv model.bin W H Xtop Ytop ROIW ROIH block exclude|- backlight65|100
@@ -36,19 +41,12 @@ Model format RSRTBIN1: version u32=1, eight u32 geometry/reference fields, sorte
 float64 labels, then centered float64 reference vectors, explicitly little-endian.
 The loader validates geometry/allocation bounds, reference variance, finite
 values, sorted labels and exact length. Wrong format/version cannot load.
-Constant frames (variance <4) and scene residual ratio >0.5 reject with NaN.
+Constant frames (variance <4) reject with NaN.
 Status/reason semantics use the existing ABI. Contexts are serially owned by a
 single worker; free only after outstanding calls finish.
 
-Acceptance on the 62 reviewed images failed. Do not deploy this candidate:
-the original adjacent-template method cannot extrapolate past the training
-range, and image similarity can confuse left/right shadows. The V04 holdout
-training minimum is -8.65, so a convex mixture cannot reach its -10 label.
-No per-image offsets, rounding, label changes or validation-frame references
-were used to conceal these failures. Flutter keeps the released reader default.
-
-Portable memory check (model previously trained by the C Windows tool):
+Portable memory check:
   gcc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer ruler_template.c test_template.c -lm -o /tmp/test_template
-  /tmp/test_template /path/to/full/model.bin
+  /tmp/test_template /path/to/model.bin
 
-This is a desktop tool. Do not package it into a board update.
+This is a desktop tool. Never include it in a board update.
