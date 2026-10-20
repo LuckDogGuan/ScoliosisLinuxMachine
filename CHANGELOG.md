@@ -1,3 +1,9 @@
+## 3.3.27 — capture-bound backlight snapshot (2026-10-20)
+
+- Apply the configured percent at the recording authorization handshake, check GPIO/PWM control readback, and bind it to that capture. Control readback is not optical illumination proof.
+- Persist the snapshot in recording/completion journals and per-video metadata; return it in completion events, pending-query responses and upload headers. Restart recovery reads the original capture snapshot; legacy files remain unknown.
+- Host regression covers immutable snapshot persistence, pending/recovery, minimum duration and recording watchdogs. User confirmed no independent angle labels; the Windows 65 candidate is not promoted by this firmware release.
+
 # Unreleased - Windows formal-video R4 C DLL (2026-10-16)
 
 - Add an independent C11 signed-reference core under tools/ruler-signed; retain the existing preview reader and all firmware services unchanged.

@@ -49,7 +49,7 @@ static int safe_id(const char *id) {
     return 1;
 }
 
-typedef struct { char id[ID_SIZE], hash[65], result[16]; long long size; int duration; uint64_t started_at; } Item;
+typedef struct { char id[ID_SIZE], hash[65], result[16]; long long size; int duration; uint64_t started_at; int backlight_percent, backlight_verified; } Item;
 typedef struct {
     char type;
     int result, duration, reason, rssi, gateway, count, wifi;
@@ -85,6 +85,7 @@ typedef struct {
     uint64_t startup_at, diagnostics_lease, diagnostics_next, last_host_contact;
     char diagnostics_id[ID_SIZE];
     int backlight_brightness, diagnostics_brightness;
+    int capture_backlight, capture_backlight_verified;
     Worker diagnostics;
     char diagnostics_health[1536];
     uint64_t diagnostics_checked_at;
@@ -96,6 +97,16 @@ typedef struct {
     char speech_id[ID_SIZE]; uint64_t speech_lease, speech_resume;
     char active_sound[32];
 } Runtime;
+static void add_backlight(cJSON *value, int percent, int verified) {
+    cJSON_DeleteItemFromObjectCaseSensitive(value, "backlight_percent");
+    cJSON_DeleteItemFromObjectCaseSensitive(value, "backlight_control_verified");
+    if (percent >= 0 && percent <= 100) cJSON_AddNumberToObject(value, "backlight_percent", percent);
+    cJSON_AddBoolToObject(value, "backlight_control_verified", verified);
+}
+static int read_backlight(const cJSON *value) {
+    double percent = num(value, "backlight_percent");
+    return percent >= 0 && percent <= 100 && percent == (int)percent ? (int)percent : -1;
+}
 static int request_unpair(Runtime *rt);
 static int begin_audio(Runtime *rt, const cJSON *request, int test);
 static void audio_messages(Runtime *rt);
@@ -232,6 +243,8 @@ static int pending_items(int offset, int limit, Item items[MAX_ITEMS], int *next
         item->duration = (int)num(metadata, "duration_ms");
         COPY(item->result, str(metadata, "result"));
         item->started_at = num(metadata, "started_at_ms") > 0 ? (uint64_t)num(metadata, "started_at_ms") : 0;
+        item->backlight_percent = read_backlight(metadata);
+        item->backlight_verified = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(metadata,"backlight_control_verified"));
         cJSON_Delete(metadata);
         count++;
     }
@@ -295,6 +308,7 @@ static void notifier_messages(Runtime *rt) {
 }
 static void start_record(Runtime *rt) {
     rt->prompt_fired=0;
+    rt->capture_backlight = -1; rt->capture_backlight_verified = 0;
     long available, total;
     long expected = ((long)rt->config->bitrate_kbps * 60000 + 7999999) / 8000000;
     long threshold = 16 + 2 * expected;
@@ -349,6 +363,7 @@ static void completed(Runtime *rt, const WorkerResult *result) {
     cJSON_AddNumberToObject(event, "started_at_ms", (double)rt->started_at);
     cJSON_AddNumberToObject(event, "ended_at_ms", rt->started_at ? (double)(rt->started_at + (unsigned)result->duration) : 0);
     cJSON_AddStringToObject(event, "stop_reason", rt->revoking ? "unpaired" : result->reason == 0 ? "released" : result->reason == 1 ? "limit" : "error");
+    add_backlight(event, rt->capture_backlight, rt->capture_backlight_verified);
     if (v3_save_json(STATE_DIR "/active-v3.json", event)) {
         syslog(LOG_CRIT, "cannot persist completion journal %s; retrying", rt->current_id);
         disable_gate(rt); cJSON_Delete(event); return;
@@ -367,6 +382,7 @@ static void completed(Runtime *rt, const WorkerResult *result) {
     cJSON_AddStringToObject(metadata, "host_id", rt->host);
     cJSON_AddNumberToObject(metadata, "started_at_ms", (double)rt->started_at);
     cJSON_AddNumberToObject(metadata, "ended_at_ms", rt->started_at ? (double)(rt->started_at + (unsigned)result->duration) : 0);
+    add_backlight(metadata, rt->capture_backlight, rt->capture_backlight_verified);
     int saved = !v3_save_json(path, metadata);
     cJSON_Delete(metadata);
     snprintf(path, sizeof(path), "%s/%s.json", EVENTS_DIR, rt->current_id);
@@ -396,6 +412,12 @@ static void record_messages(Runtime *rt) {
     if (size == 1) {
         if (result.type == 'P') {
             char response = rt->gate && v3_now() < rt->lease && rt->keys == 5 ? 'G' : 'X';
+            if (response == 'G') {
+                rt->capture_backlight = rt->backlight_brightness;
+                int applied = !platform_backlight_percent(rt->capture_backlight);
+                rt->capture_backlight_verified = applied && platform_backlight_health() == 1;
+                if (!applied) response = 'X';
+            }
             (void)send(rt->record.fd, &response, 1, MSG_NOSIGNAL);
         } else if (result.type == 'S') {
             rt->recording = 1; rt->started_at = wall_ms();
@@ -412,6 +434,7 @@ static void record_messages(Runtime *rt) {
             cJSON_AddStringToObject(event, "gate_id", rt->current_gate);
             cJSON_AddStringToObject(event, "phase", "recording");
             cJSON_AddNumberToObject(event, "started_at_ms", (double)rt->started_at);
+            add_backlight(event, rt->capture_backlight, rt->capture_backlight_verified);
             (void)v3_save_json(STATE_DIR "/recording-v3.json", event); cJSON_Delete(event);
             cJSON *journal = v3_read_json(STATE_DIR "/recording-v3.json");
             if (journal) { (void)v3_save_json(STATE_DIR "/active-v3.json", journal); cJSON_Delete(journal); }
@@ -1138,6 +1161,7 @@ static void receive_udp(Runtime *rt, uint64_t now) {
                         cJSON_AddNumberToObject(item, "duration_ms", items[i].duration);
                         cJSON_AddStringToObject(item, "result", items[i].result);
                         cJSON_AddNumberToObject(item, "started_at_ms", (double)items[i].started_at);
+                        add_backlight(item, items[i].backlight_percent, items[i].backlight_verified);
                         cJSON_AddItemToArray(list, item);
                     }
                     cJSON_AddNumberToObject(reply, "next_offset", next); success = 1;
@@ -1244,7 +1268,7 @@ static void close_pair_window(Runtime *rt, const char *reason) {
 }
 int runtime_run(Config *config) {
     Runtime rt = {.config = config, .audio_volume = config->volume, .keys = -1, .release_required = 1, .rssi = -100,
-                  .free_mb = -1, .total_mb = -1, .available_mb = -1, .memory_mb = -1};
+                  .free_mb = -1, .total_mb = -1, .available_mb = -1, .memory_mb = -1, .capture_backlight = -1};
     cJSON *backlight=v3_read_json(STATE_DIR "/backlight.json");
     double brightness=num(backlight,"brightness");
     rt.backlight_brightness=brightness >= 0 && brightness <= 100 && brightness == (int)brightness ? (int)brightness : 100;
@@ -1267,6 +1291,8 @@ int runtime_run(Config *config) {
     cJSON_Delete(pair);
     cJSON *interrupted = v3_read_json(STATE_DIR "/active-v3.json");
     if (interrupted && safe_id(str(interrupted, "capture_id"))) {
+        rt.capture_backlight = read_backlight(interrupted);
+        rt.capture_backlight_verified = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(interrupted,"backlight_control_verified"));
         rt.camera_fault=1; /* Recorder death does not prove the camera daemon stopped. */
         COPY(rt.current_id, str(interrupted, "capture_id")); COPY(rt.current_gate, str(interrupted, "gate_id"));
         rt.started_at = num(interrupted, "started_at_ms") > 0 ? (uint64_t)num(interrupted, "started_at_ms") : 0;

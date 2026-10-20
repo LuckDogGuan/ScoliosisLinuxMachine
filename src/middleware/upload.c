@@ -318,16 +318,22 @@ int http_upload(const Config *config, const char *capture_id, const char *path) 
     const char *grant = getenv("INSTRUMENT_UPLOAD_GRANT");
     char grant_header[192] = "";
     if (grant) snprintf(grant_header, sizeof(grant_header), "Grant-ID: %s\r\n", grant);
+    char backlight_header[160] = "";
+    const cJSON *percent = cJSON_GetObjectItemCaseSensitive(metadata, "backlight_percent");
+    if (cJSON_IsNumber(percent) && percent->valuedouble >= 0 && percent->valuedouble <= 100 && percent->valuedouble == percent->valueint) {
+        snprintf(backlight_header, sizeof(backlight_header), "Capture-Backlight-Percent: %d\r\nCapture-Backlight-Verified: %d\r\n", percent->valueint,
+                 cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(metadata,"backlight_control_verified")));
+    }
     cJSON_Delete(metadata);
-    char header[1024];
+    char header[1280];
     int n = snprintf(header, sizeof(header),
         "POST /api/v1/capture/file HTTP/1.1\r\n"
         "Host: %s\r\nConnection: close\r\nContent-Type: video/mp4\r\n"
         "Content-Length: %lld\r\nDevice-ID: %s\r\nCapture-ID: %s\r\n"
         "Width: %d\r\nHeight: %d\r\nFps: %d\r\nDuration-Ms: %d\r\n"
-        "Codec: h265\r\nContainer: mp4\r\n%s\r\n",
+        "Codec: h265\r\nContainer: mp4\r\n%s%s\r\n",
         host, (long long)info.st_size, config->device_id, capture_id,
-        config->width, config->height, config->fps, actual_duration, grant_header);
+        config->width, config->height, config->fps, actual_duration, grant_header, backlight_header);
     int ok = n > 0 && (size_t)n < sizeof(header) && send_all(fd, header, (size_t)n) == 0;
     char chunk[8192];
     off_t remaining = info.st_size;
