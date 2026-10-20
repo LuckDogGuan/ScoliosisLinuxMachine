@@ -156,7 +156,7 @@ static int right(rs_context *c,const uint8_t *im,int stride,rs_result *r) {
             c->opened[i]=(uint8_t)v;
         }
     }
-    memset(c->seen,0,RN);int best=0,best_right=0,best_hist[RH]={0},best_count=0;
+    memset(c->seen,0,RN);int best=0,best_right=0,best_hist[RH]={0},best_count=0,has_complete=0;
     for(int start=0;start<RN;start++)if(c->opened[start]&&!c->seen[start]) {
         int head=0,tail=1,maxx=0;c->queue[0]=start;c->seen[start]=1;
         while(head<tail){int at=c->queue[head++],y=at/RW,x=at%RW;if(x>maxx)maxx=x;
@@ -165,7 +165,11 @@ static int right(rs_context *c,const uint8_t *im,int stride,rs_result *r) {
                 int k=yy*RW+xx;if(c->opened[k]&&!c->seen[k]){c->seen[k]=1;c->queue[tail++]=k;}
             }
         }
-        if(tail>best){best=tail;best_right=maxx;best_count=0;memset(best_hist,0,sizeof(best_hist));
+        /* A crop-truncated deficit can be background, not the ruler shadow.
+         * Prefer a complete >=60-pixel component; retain the old rejection when none exists. */
+        int complete=maxx<RW-1&&tail>=60;
+        if((complete&&!has_complete)||(complete==has_complete&&tail>best)){
+            has_complete=complete;best=tail;best_right=maxx;best_count=0;memset(best_hist,0,sizeof(best_hist));
             for(int i=0;i<tail;i++)if(c->queue[i]%RW>=maxx-1){best_hist[c->queue[i]/RW]++;best_count++;}}
     }
     if(best<60)return finish(r,1,3,1);

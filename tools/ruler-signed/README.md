@@ -23,3 +23,7 @@ The Flutter caller preserves the estimate provenance in the input-image metadata
 ## Native v3 frozen round-four policy (2026-10-20)
 
 User explicitly selected the finalized fourth-round model directory. Restore the a48517a C decisions (equivalent to frozen Python), including original range rejection and unchanged local-neighbor gate. Remove v2 right-edge extrapolation and doubled-distance border recovery. Keep v2 history and packages. Windows runtime is ruler-signed-r4-native-v3; model parameters are byte-identical to the frozen round-four export. No firmware behavior changes in this policy update.
+
+## Native v4 complete-component selection (2026-10-20)
+
+A flat 65-percent live clip exposed a background deficit clipped at the crop right edge (x=1098, y=81) winning solely by area over the actual smaller shadow near x=278. Prefer the largest complete component with the existing area >=60 gate. If none exists, retain the original largest component and its original range rejection. Do not select by desired angle, extrapolate, alter anchors or widen local-neighbor thresholds. This is a localization correction to v3; the frozen fourth-round parameter bytes and source dataset stay unchanged. All 124 existing full/fold fixtures retain exact status/reason/branch/points. The reported flat clip improves from 0/94 to 27/94 valid samples (25 zero, two 0.0277778 degrees); 67 samples still reject. This is not independent accuracy acceptance. A per-frame rejection never terminates the video loop.
