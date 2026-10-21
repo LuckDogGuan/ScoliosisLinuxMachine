@@ -1,3 +1,9 @@
+## 3.3.28 - 640x480 recording (2026-10-21)
+
+- Switch the encoder to 640x480 before recording, verify RPC readback, and restore the original preview resolution afterwards. Keep 30 fps, H.265/MP4 and 4000 kbps.
+- Default to 640x480; accept installed 1280x1080 configs and normalize recording metadata in memory without rewriting network/pairing configuration.
+- The Windows signed ruler model still requires 1280x1080; 640x480 model adaptation and physical board acceptance are pending. Deployment and encoded-frame acceptance are recorded separately.
+
 ## 3.3.27 — capture-bound backlight snapshot (2026-10-20)
 
 - Apply the configured percent at the recording authorization handshake, check GPIO/PWM control readback, and bind it to that capture. Control readback is not optical illumination proof.

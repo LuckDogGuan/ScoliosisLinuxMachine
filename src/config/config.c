@@ -60,12 +60,17 @@ int config_load(const char *path, Config *config) {
     if (strncmp(config->pc_base_url, "http://", 7) ||
         strchr(config->pc_base_url + 7, '/') ||
         strcmp(fps_fraction, "60/2") || strcmp(codec, "h265") ||
-        strcmp(container, "mp4") || config->width != 1280 ||
-        config->height != 1080 || config->bitrate_kbps != 4000 ||
+        strcmp(container, "mp4") ||
+        !((config->width == 640 && config->height == 480) ||
+          (config->width == 1280 && config->height == 1080)) ||
+        config->bitrate_kbps != 4000 ||
         config->duration_ms != 10000 || config->volume < 0 || config->volume > 100)
         return -1;
     for (const char *p = config->device_id; *p; p++)
         if (!isalnum((unsigned char)*p) && *p != '-') return -1;
+    /* Accept installed legacy configs without rewriting pairing/network settings. */
+    config->width = 640;
+    config->height = 480;
     config->fps = 30;
     config->gop = 30;
     return 0;

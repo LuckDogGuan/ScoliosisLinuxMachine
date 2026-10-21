@@ -115,13 +115,17 @@ static int rpc_rate(const char *name, char *rate, size_t size, int set) {
 }
 
 int camera_get_settings(CameraSettings *settings) {
-    return rpc_rate("rk_video_get_frame_rate", settings->rate, sizeof(settings->rate), 0) ||
+    return rpc_rate("rk_video_get_resolution", settings->resolution, sizeof(settings->resolution), 0) ||
+        rpc_rate("rk_video_get_frame_rate", settings->rate, sizeof(settings->rate), 0) ||
         rpc_int("rk_video_get_max_rate", &settings->bitrate, 0) || rpc_int("rk_video_get_gop", &settings->gop, 0) ? -1 : 0;
 }
 int camera_set_settings(const CameraSettings *settings) {
     CameraSettings current;
     if (camera_get_settings(&current)) return -1;
     CameraSettings target = *settings;
+    if (strcmp(current.resolution,target.resolution) && rpc_rate("rk_video_set_resolution",target.resolution,sizeof(target.resolution),1)) return -1;
+    char actual[32] = {0};
+    if (rpc_rate("rk_video_get_resolution",actual,sizeof(actual),0) || strcmp(actual,target.resolution)) return -1;
     if (strcmp(current.rate,target.rate) && rpc_rate("rk_video_set_frame_rate",target.rate,sizeof(target.rate),1)) return -1;
     if (current.bitrate != target.bitrate && rpc_int("rk_video_set_max_rate",&target.bitrate,1)) return -1;
     if (current.gop != target.gop && rpc_int("rk_video_set_gop",&target.gop,1)) return -1;
@@ -135,6 +139,7 @@ int camera_capture_settings(int fps, int bitrate, int gop, CameraSettings *setti
     /* Current Luckfox encoder has a fixed 60-Hz source. Preserve its verified 60/2 profile. */
     if (fps <= 0 || 60 % fps) return -1;
     snprintf(settings->rate,sizeof(settings->rate),"60/%d",60/fps);
+    strcpy(settings->resolution,"640*480");
     settings->bitrate=bitrate; settings->gop=gop; return 0;
 }
 

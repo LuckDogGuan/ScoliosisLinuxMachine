@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include "cJSON.h"
 #include <stdint.h>
-typedef struct { char rate[32]; int bitrate, gop; } CameraSettings;
+typedef struct { char rate[32], resolution[32]; int bitrate, gop; } CameraSettings;
 int camera_get_settings(CameraSettings *settings);
 int camera_set_settings(const CameraSettings *settings);
 int camera_capture_settings(int fps, int bitrate, int gop, CameraSettings *settings);

@@ -6,8 +6,8 @@
     "volume": 20
   },
   "capture": {
-    "width": 1280,
-    "height": 1080,
+    "width": 640,
+    "height": 480,
     "fps_fraction": "60/2",
     "codec": "h265",
     "container": "mp4",
