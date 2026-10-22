@@ -1,3 +1,12 @@
+# 3.3.29（2026-10-22）
+
+- 启动RKiPC前关闭`type=dateTime`的OSD层，保留其他OSD、隐私遮罩、原始录像和文件/事件时间。取消日期不作为算法精度修复。
+- 新增`camera_settings_v1`能力和配对主机专属`camera_get_settings`/`camera_set_settings`。只暴露当前V4L2 NV12尺寸范围与编码通道上限都允许的候选；枚举不可用时列表为空，不编造支持。
+- 默认拍摄640×480、H.265/MP4、60/2配置；可保存驱动支持的其他调试尺寸至独立camera-profile.json，不改网络/配对配置。配对后的默认640由新版上位机下发。帧率/码率/GOP不新增未经验证的选项。
+- 配置在录像前应用并要求RPC回读；结束/失败仍恢复原预览参数。忙碌、非配对主机、错误诊断令牌、非整数和不支持尺寸拒绝；暂时无法枚举驱动不抹掉已保存选择。
+- 新增只读ARM能力探针`tools/camera_profile_probe.c`，不启动录像、不改参数。
+- ARM/host编译、真实UDP模拟驱动的支持过滤/持久化/重启/忙碌检查、日期层隔离测试及640切换/回读/恢复回归通过。实板固件部署和无日期实拍验收另行记录，不以编译代替。
+
 ## 3.3.28 - 640x480 recording (2026-10-21)
 
 - Switch the encoder to 640x480 before recording, verify RPC readback, and restore the original preview resolution afterwards. Keep 30 fps, H.265/MP4 and 4000 kbps.

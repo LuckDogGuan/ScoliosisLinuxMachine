@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Both RKiPC filenames/OSD and business processes use Beijing time.
+# Recording filenames and business processes use Beijing time; timestamp OSD is disabled below.
 export TZ=CST-8
 
 rcS() {
@@ -128,6 +128,29 @@ post_chk() {
 	if [ ! -f "/userdata/image.bmp" ]; then
 		cp -fa /oem/usr/share/image.bmp /userdata/
 	fi
+
+    # Disable date/time text only; keep all other OSD/privacy settings intact.
+    # RKiPC loads this file immediately below. Keep capture pixels free of timestamps.
+    osd_tmp="${rkipc_ini}.instrument-osd.$$"
+    if awk '
+        function flush( i) {
+            for(i=1;i<=count;i++) {
+                if (section ~ /^\[osd\.[0-9]+\]/ && datetime && lines[i] ~ /^[ \t]*enabled[ \t]*=/)
+                    sub(/=[ \t]*[^;]*/, "= 0", lines[i])
+                print lines[i]
+            }
+            count=0;datetime=0
+        }
+        /^\[/ {flush();section=$0}
+        {lines[++count]=$0;if($0 ~ /^[ \t]*type[ \t]*=[ \t]*dateTime([ \t;]|$)/)datetime=1}
+        END {flush()}
+    ' "$rkipc_ini" > "$osd_tmp"; then
+        chmod 600 "$osd_tmp"
+        mv "$osd_tmp" "$rkipc_ini"
+    else
+        echo "Cannot disable timestamp OSD; refusing camera startup" >&2
+        return 1
+    fi
 
 	# Keep RKiPC output on the same filesystem/path as the capture service.
 	sed -i 's|^mount_path[[:space:]]*=.*|mount_path = /|' "$rkipc_ini"

@@ -106,6 +106,8 @@ static int record_impl(const Config *config, const char *capture_id, int control
     if (snapshot(names, &count) || collision_near_now()) return -1;
     CameraSettings target;
     if (camera_capture_settings(config->fps,config->bitrate_kbps,config->gop,&target)) return -1;
+    if (config->width>0 && config->height>0)
+        snprintf(target.resolution,sizeof(target.resolution),"%d*%d",config->width,config->height);
     int started = 0, ok = 0;
     if (duration_ms) *duration_ms = 0;
     if (reason) *reason = 2;

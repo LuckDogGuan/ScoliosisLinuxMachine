@@ -2,8 +2,13 @@
 #define INSTRUMENT_PLATFORM_H
 #include <stddef.h>
 #include "cJSON.h"
+#include "app.h"
 #include <stdint.h>
 typedef struct { char rate[32], resolution[32]; int bitrate, gop; } CameraSettings;
+int camera_profile_supported(int width, int height);
+void camera_profile_reply(const Config *config, cJSON *reply);
+int camera_profile_set(Config *config, const cJSON *request);
+void camera_profile_load(Config *config);
 int camera_get_settings(CameraSettings *settings);
 int camera_set_settings(const CameraSettings *settings);
 int camera_capture_settings(int fps, int bitrate, int gop, CameraSettings *settings);

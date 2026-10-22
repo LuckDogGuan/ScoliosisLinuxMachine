@@ -772,7 +772,7 @@ static cJSON *base_reply(Runtime *rt, const cJSON *request) {
 static void hello_reply(Runtime *rt, cJSON *reply, uint64_t now) {
     cJSON_ReplaceItemInObjectCaseSensitive(reply, "ok", cJSON_CreateTrue());
     cJSON *capabilities = cJSON_AddArrayToObject(reply, "capabilities");
-    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard", "backlight_brightness", "speech_focus", "speech_preempt", "diagnostics_health_v1"};
+    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard", "backlight_brightness", "speech_focus", "speech_preempt", "diagnostics_health_v1", "camera_settings_v1"};
     for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); i++) cJSON_AddItemToArray(capabilities, cJSON_CreateString(names[i]));
     cJSON_AddStringToObject(reply, "paired_host_id", rt->revoking ? "" : rt->host);
     cJSON_AddNumberToObject(reply, "volume", rt->audio_volume);
@@ -1073,6 +1073,15 @@ static void receive_udp(Runtime *rt, uint64_t now) {
                 }
             } else cJSON_AddStringToObject(reply,"error","busy_or_invalid_time");
             cJSON_AddNumberToObject(reply,"utc_ms",(double)wall_ms());
+        } else if (!strcmp(op,"camera_get_settings")) {
+            camera_profile_reply(rt->config,reply); success=1;
+        } else if (!strcmp(op,"camera_set_settings")) {
+            if (!rt->gate && !rt->record.pid && !rt->completion_pending && !rt->upload.pid &&
+                (now>=rt->diagnostics_lease || !strcmp(rt->diagnostics_id,str(request,"diagnostics_id")))) {
+                success=!camera_profile_set(rt->config,request);
+                if (!success) cJSON_AddStringToObject(reply,"error","unsupported_camera_format_or_save_failed");
+            } else cJSON_AddStringToObject(reply,"error","camera_settings_busy");
+            camera_profile_reply(rt->config,reply);
         } else if (!strcmp(op, "diagnostics_backlight")) {
             double percent=num(request,"brightness");
             if (now < rt->diagnostics_lease && !strcmp(rt->diagnostics_id,str(request,"diagnostics_id")) &&
@@ -1269,6 +1278,7 @@ static void close_pair_window(Runtime *rt, const char *reason) {
 int runtime_run(Config *config) {
     Runtime rt = {.config = config, .audio_volume = config->volume, .keys = -1, .release_required = 1, .rssi = -100,
                   .free_mb = -1, .total_mb = -1, .available_mb = -1, .memory_mb = -1, .capture_backlight = -1};
+    camera_profile_load(config);
     cJSON *backlight=v3_read_json(STATE_DIR "/backlight.json");
     double brightness=num(backlight,"brightness");
     rt.backlight_brightness=brightness >= 0 && brightness <= 100 && brightness == (int)brightness ? (int)brightness : 100;
