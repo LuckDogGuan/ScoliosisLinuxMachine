@@ -1,0 +1,4 @@
+version=3.3.29
+release_tag=instrument-v3.3.29
+source_commit=69807088d76c5964df510b76bf2fcd242f71814f
+build_utc=2026-10-22T02:56:49Z
