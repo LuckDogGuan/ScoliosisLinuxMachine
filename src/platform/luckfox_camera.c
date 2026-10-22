@@ -218,3 +218,38 @@ finished:
     instrument_trace("diagnostics_camera","","","",code);
     return !strcmp(code,"ok") ? 0 : -1;
 }
+
+/* The vendor start/status RPC acknowledges a flag even when no encoded frame arrives.
+ * Require the existing in-process mux adapter's first successful frame of this start. */
+int camera_record_ready(uint64_t since_ms) {
+    FILE *file = fopen(STATE_DIR "/mux.jsonl", "r");
+    if (!file) return 0;
+    if (fseeko(file, 0, SEEK_END)) { fclose(file); return 0; }
+    off_t length = ftello(file);
+    if (length < 0) { fclose(file); return 0; }
+    char line[1024];
+    off_t start = length > 8192 ? length - 8192 : 0;
+    if (fseeko(file, start, SEEK_SET)) { fclose(file); return 0; }
+    if (start && !fgets(line, sizeof(line), file)) { fclose(file); return 0; }
+    int initialized = 0, ready = 0;
+    while (fgets(line, sizeof(line), file)) {
+        cJSON *row = cJSON_Parse(line);
+        if (!row) continue;
+        const cJSON *event = cJSON_GetObjectItemCaseSensitive(row, "event");
+        const cJSON *when = cJSON_GetObjectItemCaseSensitive(row, "monotonic_ms");
+        const cJSON *result = cJSON_GetObjectItemCaseSensitive(row, "result");
+        if (cJSON_IsString(event) && cJSON_IsNumber(when) && when->valuedouble >= (double)since_ms) {
+            if (!strcmp(event->valuestring, "mux_init")) {
+                initialized = cJSON_IsNumber(result) && result->valueint == 0;
+                ready = initialized ? 0 : -1;
+            } else if (initialized && !strcmp(event->valuestring, "video_frame")) {
+                const cJSON *frames = cJSON_GetObjectItemCaseSensitive(row, "frames");
+                if (cJSON_IsNumber(result) && result->valueint == 0 && cJSON_IsNumber(frames) && frames->valueint > 0) ready = 1;
+                else ready = -1;
+            }
+        }
+        cJSON_Delete(row);
+    }
+    fclose(file);
+    return ready;
+}

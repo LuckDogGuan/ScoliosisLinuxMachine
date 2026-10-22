@@ -15,6 +15,7 @@ int camera_capture_settings(int fps, int bitrate, int gop, CameraSettings *setti
 int camera_start(void);
 int camera_stop(void);
 int camera_status(int *status);
+int camera_record_ready(uint64_t since_ms);
 void camera_diagnostic_health(char *json, size_t size);
 int platform_backlight_health(void);
 int platform_button_raw(int *mask);
