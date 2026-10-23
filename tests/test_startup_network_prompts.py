@@ -18,7 +18,7 @@ results = [subprocess.run([str(evidence / "check"), mode], timeout=10).returncod
            for mode in ("boot", "network")]
 assets = json.loads((root / "sounds/stability-voice-manifest.json").read_text())["files"]
 names = [pathlib.Path(row["file"]).stem for row in assets]
-assert len(names) == len(set(names)) == 22
+assert len(names) == len(set(names)) == 24
 results.append(subprocess.run([str(evidence / "check"), "assets", *names], timeout=10).returncode)
 print("Evidence:", evidence, flush=True)
 assert results == [0, 0, 0], results

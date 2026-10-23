@@ -15,21 +15,21 @@
     },
     {
       "file": "capture_enabled.wav",
-      "phrase": "拍摄已启用",
-      "seconds": 2.195,
-      "sample_rate": 16000,
-      "channels": 1,
-      "bits": 16,
-      "sha256": "518991bdeb25271397909dd628abb56e6d79a6126eee1b444816212e04ffa809"
-    },
-    {
-      "file": "capture_disabled.wav",
-      "phrase": "拍摄已停止",
+      "phrase": "检测已就绪",
       "seconds": 2.245,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "570c857747438253d6da7a07f454c4b6f857ac1b12f3df08d7614d15e723ca33"
+      "sha256": "2b794b89ed7b7e9ff5326da8dee182ca63a5efc03f94f4cddfb1f19917418f51"
+    },
+    {
+      "file": "capture_disabled.wav",
+      "phrase": "检测已暂停",
+      "seconds": 2.3,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "9c1993da892308b7b623f4e92d56753c5fa6ad8a65cb94472a0b33d8298c26a6"
     },
     {
       "file": "capture_start.wav",
@@ -42,30 +42,30 @@
     },
     {
       "file": "capture_done.wav",
-      "phrase": "拍摄完成",
-      "seconds": 1.945,
+      "phrase": "检测完成",
+      "seconds": 1.95,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "f2decbcd8c78c17792df67bb48014012e666ba426f12fe61e15437b41be6d7fa"
+      "sha256": "21642228352174dedcbe294aa8c71a330695337850dcbd83b89da970a34f1b21"
     },
     {
       "file": "capture_short.wav",
-      "phrase": "录像过短，请重拍",
-      "seconds": 3.015,
+      "phrase": "时间不足，请重新检测",
+      "seconds": 3.52,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "79c363c1d537d36eb5c7e30aedb3d949dc828e3824bdb726331065e7b563a5b7"
+      "sha256": "268f5c984ce824d2e857ce3fde5345c2f63614afa583e39cd08248a4c2fdf487"
     },
     {
       "file": "capture_failed.wav",
-      "phrase": "拍摄失败，请重拍",
-      "seconds": 2.95,
+      "phrase": "检测未完成，请重试",
+      "seconds": 3.39,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "e9847a5f6fdd6a48cf5d9594c3041205313af270eace00f100063981b048612e"
+      "sha256": "bb52c098718672f7a68ca0336aed21aa8c87a997cc45933681acd9203a8ba0fa"
     },
     {
       "file": "pair_window.wav",
@@ -201,6 +201,24 @@
       "channels": 1,
       "bits": 16,
       "sha256": "133a773c3cbb2b4e81c382ebbd57510bd6994838aeee793bfeb00faeb8f3f956"
+    },
+    {
+      "file": "detection_not_enabled.wav",
+      "phrase": "请先在电脑端开启检测",
+      "seconds": 3.505,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "0d5ec61a475c6f84ec4afcc3efcc6529729ceb33f9263839662b1118419e5530"
+    },
+    {
+      "file": "class_completed.wav",
+      "phrase": "本班检测已完成",
+      "seconds": 2.765,
+      "sample_rate": 16000,
+      "channels": 1,
+      "bits": 16,
+      "sha256": "b61fce5830a32e9035106968e646a20e2842e9376e9bc950bc81ad5ebc35fa30"
     }
   ]
 }

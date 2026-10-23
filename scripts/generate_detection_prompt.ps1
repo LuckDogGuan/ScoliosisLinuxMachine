@@ -1,7 +1,9 @@
 ﻿param(
-    [Parameter(Mandatory=$true)][string]$OutputPath
+    [Parameter(Mandatory=$true)][string]$OutputPath,
+    [string]$Phrase = '开始检测'
 )
-# Run in Windows PowerShell/PowerShell 7; import the WAV into WSL after generation.
+# OneCore Kangkang requires PowerShell 7 here; import the WAV into WSL after generation.
+$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Speech
 $voice = [System.Speech.Synthesis.SpeechSynthesizer]::new()
 try {
@@ -14,7 +16,7 @@ try {
         [System.Speech.AudioFormat.AudioChannel]::Mono
     )
     $voice.SetOutputToWaveFile($OutputPath, $format)
-    $voice.Speak('开始检测')
+    $voice.Speak($Phrase)
     $voice.SetOutputToNull()
 } finally {
     $voice.Dispose()

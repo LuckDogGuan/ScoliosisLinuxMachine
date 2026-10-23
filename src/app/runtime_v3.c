@@ -63,13 +63,14 @@ typedef struct {
     Config *config;
     int udp, paired, gate, keys, release_required, recording, stop_sent, revoking;
     int middle_fired, audio_result, audio_volume, camera_fault;
-    int prompt_reserved, prompt_fired;
+    int prompt_reserved, prompt_fired, enable_reminder_fired;
+    uint64_t enable_reminder_started, enable_reminder_last;
     uint64_t recording_mono, stopped_mono, recovery_retry;
     cJSON *last_completed;
     char system_boot[64];
     Worker recovery;
     uint64_t middle_hold;
-    char audio_id[ID_SIZE], event_cursor[256];
+    char audio_id[ID_SIZE], event_cursor[256], class_completion_id[ID_SIZE];
     char boot[ID_SIZE], host[ID_SIZE], txn[ID_SIZE], candidate[ID_SIZE], candidate_ip[64];
     int candidate_port;
     char revoked_host[ID_SIZE], unpair[ID_SIZE], gate_id[ID_SIZE], capture_id[ID_SIZE], current_id[ID_SIZE], current_gate[ID_SIZE];
@@ -130,15 +131,16 @@ static int save_pair(Runtime *rt) {
     cJSON_Delete(state);
     return result;
 }
-static void disable_gate(Runtime *rt) {
+static void disable_gate_prompt(Runtime *rt, const char *prompt) {
     int was_enabled = rt->gate;
     rt->gate = 0;
     rt->lease = 0;
     rt->capture_id[0] = 0;
     if (!rt->record.pid) { cancel_capture_prompt(rt); rt->release_required=1; }
     if (!rt->record.pid) COPY(rt->phase, "idle");
-    if (was_enabled) queue_sound(rt, "capture_disabled");
+    if (was_enabled && prompt) queue_sound(rt, prompt);
 }
+static void disable_gate(Runtime *rt) { disable_gate_prompt(rt,"capture_disabled"); }
 static int local_unpair(Runtime *rt) {
     char previous[ID_SIZE]; COPY(previous, rt->host);
     if (storage_capture_id(rt->config, rt->unpair, sizeof(rt->unpair))) return -1;
@@ -772,7 +774,7 @@ static cJSON *base_reply(Runtime *rt, const cJSON *request) {
 static void hello_reply(Runtime *rt, cJSON *reply, uint64_t now) {
     cJSON_ReplaceItemInObjectCaseSensitive(reply, "ok", cJSON_CreateTrue());
     cJSON *capabilities = cJSON_AddArrayToObject(reply, "capabilities");
-    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard", "backlight_brightness", "speech_focus", "speech_preempt", "diagnostics_health_v1", "camera_settings_v1"};
+    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard", "backlight_brightness", "speech_focus", "speech_preempt", "diagnostics_health_v1", "camera_settings_v1", "detection_status_voice_v1"};
     for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); i++) cJSON_AddItemToArray(capabilities, cJSON_CreateString(names[i]));
     cJSON_AddStringToObject(reply, "paired_host_id", rt->revoking ? "" : rt->host);
     cJSON_AddNumberToObject(reply, "volume", rt->audio_volume);
@@ -909,9 +911,39 @@ static void cancel_capture_prompt(Runtime *rt) {
     }
     rt->hold_started=0; rt->prompt_reserved=rt->prompt_fired=0;
 }
+/* This reminder never grants a gate or starts a recording. */
+static void cancel_detection_reminder(Runtime *rt) {
+    unsigned kept=rt->sound_out;
+    for (unsigned i=rt->sound_out;i<rt->sound_in;i++) {
+        if (strcmp(rt->sounds[i%8],"detection_not_enabled")) {
+            if (kept!=i) COPY(rt->sounds[kept%8],rt->sounds[i%8]);
+            kept++;
+        }
+    }
+    rt->sound_in=kept;
+    if (rt->audio.pid && !strcmp(rt->active_sound,"detection_not_enabled")) abort_worker(&rt->audio);
+    rt->enable_reminder_started=0;
+}
+static void detection_enable_reminder(Runtime *rt, uint64_t now) {
+    int connected=rt->paired && !rt->revoking && rt->last_host_contact && now>=rt->last_host_contact && now-rt->last_host_contact<15000;
+    if ((rt->gate && now<rt->lease) || !connected || now<rt->diagnostics_lease || rt->diagnostics.pid ||
+        rt->camera_fault || rt->record.pid || rt->completion_pending || rt->notifier.pid) {
+        cancel_detection_reminder(rt); return;
+    }
+    if (!rt->enable_reminder_started) rt->enable_reminder_started=now;
+    if (!rt->enable_reminder_fired && now-rt->enable_reminder_started>=1500 &&
+        (!rt->enable_reminder_last || now-rt->enable_reminder_last>=20000) && rt->sound_in-rt->sound_out<8) {
+        queue_sound(rt,"detection_not_enabled"); rt->enable_reminder_fired=1; rt->enable_reminder_last=now;
+        instrument_trace("detection_not_enabled","","",rt->boot,"");
+    }
+}
 /* Reserve PC cancellation before the prompt; late readiness still preserves this ordering. */
 static int capture_gesture(Runtime *rt, uint64_t now) {
-    if (rt->keys != 5) { cancel_capture_prompt(rt); return 0; }
+    if (rt->keys != 5) {
+        rt->enable_reminder_started=0; rt->enable_reminder_fired=0;
+        cancel_capture_prompt(rt); return 0;
+    }
+    detection_enable_reminder(rt,now);
     if (!rt->hold_started) rt->hold_started=now;
     int eligible=now>=rt->diagnostics_lease && instrument_can_start(rt->release_required,rt->gate && now<rt->lease,
         rt->capture_id[0]!=0,rt->camera_fault || rt->record.pid || rt->completion_pending || rt->notifier.pid,1200);
@@ -1132,13 +1164,24 @@ static void receive_udp(Runtime *rt, uint64_t now) {
             cJSON_AddStringToObject(reply,"speech_id",str(request,"speech_id"));
             cJSON_AddNumberToObject(reply,"remaining_ms",rt->speech_lease>now ? (double)(rt->speech_lease-now) : 0);
         } else if (!strcmp(op, "capture_disable")) {
-            if (!strcmp(rt->gate_id, str(request, "gate_id"))) { disable_gate(rt); success = 1; }
+            if (!strcmp(rt->gate_id, str(request, "gate_id"))) {
+                const char *reason=str(request,"reason");
+                int finished=!strcmp(reason,"round_completed") || !strcmp(reason,"class_completed") || !strcmp(reason,"skip_student");
+                disable_gate_prompt(rt,finished ? NULL : "capture_disabled"); success=1;
+            }
             cJSON_AddStringToObject(reply, "phase", rt->phase);
+        } else if (!strcmp(op,"detection_class_complete")) {
+            const char *id=str(request,"operation_id");
+            if (safe_id(id) && !rt->gate && !rt->record.pid && !rt->completion_pending && now>=rt->diagnostics_lease &&
+                (!strcmp(rt->class_completion_id,id) || rt->sound_in-rt->sound_out<8)) {
+                if (strcmp(rt->class_completion_id,id)) { queue_sound(rt,"class_completed"); COPY(rt->class_completion_id,id); }
+                success=1;
+            } else cJSON_AddStringToObject(reply,"error","class_completion_busy_or_invalid");
         } else if (!strcmp(op, "capture_enable")) {
             const char *gate = str(request, "gate_id"); int ttl = (int)num(request, "ttl_ms");
             if (!rt->camera_fault && now >= rt->diagnostics_lease && !rt->diagnostics.pid && !rt->record.pid && !rt->completion_pending && safe_id(gate) && ttl > 0 && ttl <= 6000 && strcmp(gate, rt->gate_id)) {
                 COPY(rt->gate_id, gate); rt->gate = 1; rt->lease = now + (unsigned)ttl;
-                rt->capture_id[0] = 0; queue_sound(rt, "capture_enabled"); success = 1;
+                rt->capture_id[0] = 0; cancel_detection_reminder(rt); queue_sound(rt, "capture_enabled"); success = 1;
             }
         } else if (!strcmp(op, "capture_renew")) {
             int ttl = (int)num(request, "ttl_ms");
