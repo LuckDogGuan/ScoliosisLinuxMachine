@@ -33,12 +33,12 @@
     },
     {
       "file": "capture_start.wav",
-      "phrase": "开始拍摄",
-      "seconds": 1.92,
+      "phrase": "开始检测",
+      "seconds": 1.965,
       "sample_rate": 16000,
       "channels": 1,
       "bits": 16,
-      "sha256": "f287ae374f51f51c06e881820b8df73c549fcea403ed35da6ff20ed94f045ca6"
+      "sha256": "5cf80d9a27489f631410653ef76e2f37f0218515a0e53bc3f7167912ad476dba"
     },
     {
       "file": "capture_done.wav",

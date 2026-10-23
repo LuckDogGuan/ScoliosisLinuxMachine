@@ -155,9 +155,7 @@ static void reap_upload(void) {
     pid_t result = waitpid(upload_pid, &status, WNOHANG);
     if (!result) return;
     upload_pid = -1;
-    if (result > 0 && WIFEXITED(status) && !WEXITSTATUS(status))
-        (void)audio_play("uploaded");
-    else {
+    if (!(result > 0 && WIFEXITED(status) && !WEXITSTATUS(status))) {
         if (strcmp(warned_capture_id, upload_capture_id)) {
             (void)audio_play("saved_on_device");
             snprintf(warned_capture_id, sizeof(warned_capture_id), "%s", upload_capture_id);

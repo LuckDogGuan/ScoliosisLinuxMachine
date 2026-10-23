@@ -691,7 +691,7 @@ static void upload_messages(Runtime *rt) {
         /* Only this explicitly receipted file may be removed; current capture is independent. */
         if (!unlink(path)) {
             snprintf(path, sizeof(path), "%s/%s.json", PENDING_DIR, rt->upload_id);
-            (void)unlink(path); queue_sound(rt, "uploaded");
+            (void)unlink(path);
         }
     } else queue_sound(rt, "saved_on_device");
     rt->upload_id[0] = 0;
