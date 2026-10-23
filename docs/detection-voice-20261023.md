@@ -1,5 +1,7 @@
 # 检测语音调整验证（2026-10-23）
 
+当前结果：3.3.31已通过Wi-Fi/SSH安装并重启校验；版本、程序和语音文件哈希一致，独立aplay播放退出码0，待传数仍为3，设备恢复idle且camera_fault=false。现场听感与真实拍摄上传尚未验收。完整证据：Windows调试/记录/detection-voice-flash-20261023/。以下保留首次源码修改阶段的历史验证记录。
+
 - 权威源码：WSL Luckfox-Ubuntu-22.04:/home/guanjx/luckfox/Scoliosis。
 - 修改基线：17d1963939a5（3.3.30）；本次为未发布改动，未更新实板。
 - capture_start.wav 改为“开始检测”；Microsoft Kangkang、rate=-1、16000Hz、单声道、16bit PCM，1.965秒。
