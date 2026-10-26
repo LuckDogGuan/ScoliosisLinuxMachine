@@ -24,6 +24,9 @@ static void command(Runtime *rt,const char *op,const char *host,const char *nonc
 static void protocol_check(Config *config) {
     Runtime rt={.config=config,.udp=-1,.paired=1,.gate=1,.free_mb=1000};
     COPY(rt.host,"host-test");COPY(rt.boot,"boot-test");COPY(rt.peer_ip,"127.0.0.1");
+    command(&rt,"hello_query","host-test","nonce-version",0);
+    cJSON *version_reply=cJSON_Parse(answer);assert(version_reply);
+    assert(!strcmp(str(version_reply,"firmware"),INSTRUMENT_VERSION));cJSON_Delete(version_reply);
     packet="{\"version\":3,\"device_id\":\"CAM-test\",\"boot_id\":\"boot-test\",\"host_id\":\"host-test\",\"op\":\"pending_query\",\"nonce\":\"invalid-page\",\"sequence\":0,\"offset\":0,\"limit\":16}";
     answer[0]=0;receive_udp(&rt,v3_now());
     assert(strstr(answer,"invalid_pending_query") && !strstr(answer,"precondition_not_met"));
@@ -55,6 +58,27 @@ static void trace_check(void) {
     uint64_t before=v3_now();instrument_trace("contended","","","","");assert(v3_now()-before<100);
     kill(child,SIGKILL);assert(waitpid(child,NULL,0)==child);
     instrument_trace("after_lock","","","boot-test","");
+
+    assert(!unlink(INSTRUMENT_LOG_DIR "/fault-marker.json"));
+    cJSON *request=cJSON_CreateObject(),*reply=cJSON_CreateObject();
+    cJSON_AddStringToObject(request,"op","evidence_collect");
+    cJSON_AddNumberToObject(request,"sequence",731);
+    cJSON_AddBoolToObject(reply,"ok",0);
+    cJSON_AddStringToObject(reply,"error","evidence_busy");
+    instrument_trace_protocol(request,reply,"boot-test","127.0.0.1:12345");
+    assert(access(INSTRUMENT_LOG_DIR "/fault-marker.json",F_OK));
+    f=fopen(INSTRUMENT_LOG_DIR "/runtime.jsonl","r");assert(f);
+    char last[2100]="";
+    while(fgets(line,sizeof(line),f))snprintf(last,sizeof(last),"%s",line);
+    fclose(f);row=cJSON_Parse(last);assert(row);
+    assert(num(row,"protocol_sequence")==731 && num(row,"sequence")!=731);
+    cJSON_Delete(row);
+    cJSON_ReplaceItemInObject(reply,"error",cJSON_CreateString("host_not_paired"));
+    instrument_trace_protocol(request,reply,"boot-test","127.0.0.1:12345");
+    assert(!access(INSTRUMENT_LOG_DIR "/fault-marker.json",F_OK));
+    cJSON_Delete(request);cJSON_Delete(reply);
+    puts("PASS busy evidence does not spawn faults; wire/event sequences differ; identity failures still mark faults");
+
     puts("PASS 2KiB valid trace, independent fault marker, non-blocking rotation lock and drop accounting");
 }
 static void package_check(Config *config) {

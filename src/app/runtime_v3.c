@@ -832,6 +832,7 @@ static cJSON *base_reply(Runtime *rt, const cJSON *request) {
     return reply;
 }
 static void hello_reply(Runtime *rt, cJSON *reply, uint64_t now) {
+    cJSON_AddStringToObject(reply, "firmware", INSTRUMENT_VERSION);
     cJSON_ReplaceItemInObjectCaseSensitive(reply, "ok", cJSON_CreateTrue());
     cJSON *capabilities = cJSON_AddArrayToObject(reply, "capabilities");
     static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard", "backlight_brightness", "speech_focus", "speech_preempt", "diagnostics_health_v1", "camera_settings_v1", "detection_status_voice_v1", "evidence_v1"};

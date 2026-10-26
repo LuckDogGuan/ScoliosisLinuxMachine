@@ -78,6 +78,10 @@ void instrument_trace(const char *event, const char *capture, const char *gate, 
                 cJSON_Delete(fields);
             }
         }
+        const cJSON *op=cJSON_GetObjectItemCaseSensitive(row,"op");
+        const cJSON *error=cJSON_GetObjectItemCaseSensitive(row,"error");
+        int diagnostic_busy=cJSON_IsString(op) && !strcmp(op->valuestring,"evidence_collect") &&
+            cJSON_IsString(error) && !strcmp(error->valuestring,"evidence_busy");
         char buffer[2048];
         if (!cJSON_PrintPreallocated(row,buffer,sizeof(buffer)-2,0)) {
             cJSON_DeleteItemFromObjectCaseSensitive(row,"detail");
@@ -105,7 +109,7 @@ void instrument_trace(const char *event, const char *capture, const char *gate, 
             } else trace_dropped++;
             int failed=strstr(event,"failed") || strstr(event,"error") || strstr(event,"watchdog") ||
                 (detail && (strstr(detail,"\"result\":\"failed\"") || strstr(detail,"\"ok\":false")));
-            if(failed) {
+            if(failed && !diagnostic_busy) {
                 struct stat fault_st;
                 if(stat(LOG_DIR "/fault-marker.json",&fault_st) || time(NULL)-fault_st.st_mtime>=60) {
                     char fault_id[128];snprintf(fault_id,sizeof(fault_id),"B-%.80s-%lu",trace_run,trace_sequence);
@@ -124,11 +128,13 @@ void instrument_trace_protocol(const cJSON *request, const cJSON *reply, const c
     const cJSON *ok=cJSON_GetObjectItemCaseSensitive(reply,"ok");
     if(cJSON_IsString(operation) && !strcmp(operation->valuestring,"hello_query") && cJSON_IsTrue(ok) && v3_now()>=trace_detail_until) return;
     cJSON *fields = cJSON_CreateObject(); if (!fields) return;
-    const char *names[] = {"op", "device_id", "host_id", "gate_id", "capture_id", "event_id", "grant_id", "txn_id", "operation_id", "sequence", "nonce", "size_bytes", "sha256"};
+    const char *names[] = {"op", "device_id", "host_id", "gate_id", "capture_id", "event_id", "grant_id", "txn_id", "operation_id", "nonce", "size_bytes", "sha256"};
     for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); i++) {
         const cJSON *item = cJSON_GetObjectItemCaseSensitive(request,names[i]);
         if (item) cJSON_AddItemToObject(fields,names[i],cJSON_Duplicate(item,1));
     }
+    const cJSON *sequence=cJSON_GetObjectItemCaseSensitive(request,"sequence");
+    if(sequence)cJSON_AddItemToObject(fields,"protocol_sequence",cJSON_Duplicate(sequence,1));
     cJSON_AddStringToObject(fields,"direction","pc_to_board");
     cJSON_AddStringToObject(fields,"source_endpoint",endpoint);
     cJSON_AddBoolToObject(fields,"ok",cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(reply,"ok")));
