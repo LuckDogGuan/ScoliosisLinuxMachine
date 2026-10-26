@@ -13,6 +13,7 @@
 #define LOG_DIR INSTRUMENT_ROOT "/logs"
 static unsigned long trace_sequence, trace_dropped;
 static pid_t trace_pid;
+static char trace_run[160];
 static unsigned long trace_sampled;
 static struct {unsigned long key,count;uint64_t when;} repeats[16];
 
@@ -44,8 +45,14 @@ void instrument_trace(const char *event, const char *capture, const char *gate, 
     }
     cJSON *row = cJSON_CreateObject();
     if (row) {
-        if(trace_pid!=getpid()) {trace_pid=getpid();trace_sequence=0;}
-        char run[160];snprintf(run,sizeof(run),"%s-%ld",boot?boot:"",(long)getpid());
+        if(trace_pid!=getpid()) {
+            trace_pid=getpid();trace_sequence=0;
+            char system_boot[64]="unknown";FILE *identity=fopen("/proc/sys/kernel/random/boot_id","r");
+            if(identity){if(!fgets(system_boot,sizeof(system_boot),identity))strcpy(system_boot,"unknown");fclose(identity);}
+            system_boot[strcspn(system_boot,"\r\n")]=0;
+            snprintf(trace_run,sizeof(trace_run),"R-%s-%ld-%llu",system_boot,(long)getpid(),(unsigned long long)v3_now());
+        }
+        const char *run=trace_run;
         cJSON_AddStringToObject(row,"run_id",run);
         cJSON_AddNumberToObject(row,"sequence",(double)++trace_sequence);
         cJSON_AddNumberToObject(row,"repeat_count",(double)repeated+1);
@@ -101,7 +108,7 @@ void instrument_trace(const char *event, const char *capture, const char *gate, 
             if(failed) {
                 struct stat fault_st;
                 if(stat(LOG_DIR "/fault-marker.json",&fault_st) || time(NULL)-fault_st.st_mtime>=60) {
-                    char fault_id[128];snprintf(fault_id,sizeof(fault_id),"B-%ld-%llu",(long)getpid(),(unsigned long long)v3_now());
+                    char fault_id[128];snprintf(fault_id,sizeof(fault_id),"B-%.80s-%lu",trace_run,trace_sequence);
                     cJSON_AddStringToObject(row,"fault_id",fault_id);
                     (void)v3_save_json(LOG_DIR "/fault-marker.json",row);
                 }
