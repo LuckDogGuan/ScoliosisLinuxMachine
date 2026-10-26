@@ -11,6 +11,7 @@ SOURCES = \
 	src/middleware/legacy.c \
 	src/platform/process.c \
 	src/platform/trace.c \
+	src/middleware/evidence.c \
 	src/platform/luckfox_gpio.c \
 	src/platform/luckfox_camera.c \
 	src/platform/camera_profiles.c \

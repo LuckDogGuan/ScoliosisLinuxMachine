@@ -6,18 +6,52 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <sys/file.h>
+
+#define LOG_DIR INSTRUMENT_ROOT "/logs"
+static unsigned long trace_sequence, trace_dropped;
+static pid_t trace_pid;
+static unsigned long trace_sampled;
+static struct {unsigned long key,count;uint64_t when;} repeats[16];
+
+static uint64_t trace_detail_until;
+void instrument_trace_detail(uint64_t until) {trace_detail_until=until;}
+
+
 void instrument_trace(const char *event, const char *capture, const char *gate, const char *boot, const char *detail) {
-    int lock = open(STATE_DIR "/trace.lock", O_CREAT|O_WRONLY|O_CLOEXEC, 0600);
-    if (lock < 0) return;
+    unsigned long key=5381;
+    for(const unsigned char *p=(const unsigned char*)event;*p;p++)key=key*33+*p;
+    if(capture)for(const unsigned char *p=(const unsigned char*)capture;*p;p++)key=key*33+*p;
+    if(detail)for(const unsigned char *p=(const unsigned char*)detail;*p && p<(const unsigned char*)detail+2048;p++)key=key*33+*p;
+    unsigned slot=(unsigned)(key%16);uint64_t mono=v3_now();
+    unsigned long repeated=0;
+    if(repeats[slot].key==key && mono-repeats[slot].when<1000) {
+        repeats[slot].count++;trace_sampled++;return;
+    }
+    if(repeats[slot].key==key)repeated=repeats[slot].count;
+    repeats[slot].key=key;repeats[slot].when=mono;repeats[slot].count=0;
+    (void)mkdir(LOG_DIR,0700);
+    int lock = open(LOG_DIR "/trace.lock", O_CREAT|O_WRONLY|O_CLOEXEC, 0600);
+    if (lock < 0) { trace_dropped++; return; }
     struct flock guard = {.l_type=F_WRLCK, .l_whence=SEEK_SET};
-    if (fcntl(lock, F_SETLK, &guard)) { close(lock); return; }
+    if (fcntl(lock, F_SETLK, &guard)) { trace_dropped++; close(lock); return; }
     struct stat st;
-    if (!stat(STATE_DIR "/runtime.jsonl", &st) && st.st_size > 4*1024*1024) {
-        (void)rename(STATE_DIR "/runtime.jsonl.1", STATE_DIR "/runtime.jsonl.2");
-        (void)rename(STATE_DIR "/runtime.jsonl", STATE_DIR "/runtime.jsonl.1");
+    if (!stat(LOG_DIR "/runtime.jsonl", &st) && st.st_size > 3*1024*1024) {
+        (void)rename(LOG_DIR "/runtime.jsonl.1", LOG_DIR "/runtime.jsonl.2");
+        (void)rename(LOG_DIR "/runtime.jsonl", LOG_DIR "/runtime.jsonl.1");
     }
     cJSON *row = cJSON_CreateObject();
     if (row) {
+        if(trace_pid!=getpid()) {trace_pid=getpid();trace_sequence=0;}
+        char run[160];snprintf(run,sizeof(run),"%s-%ld",boot?boot:"",(long)getpid());
+        cJSON_AddStringToObject(row,"run_id",run);
+        cJSON_AddNumberToObject(row,"sequence",(double)++trace_sequence);
+        cJSON_AddNumberToObject(row,"repeat_count",(double)repeated+1);
+        cJSON_AddNumberToObject(row,"sampled",(double)trace_sampled);
+        cJSON_AddNumberToObject(row,"dropped",(double)trace_dropped);
+        cJSON_AddStringToObject(row,"version",INSTRUMENT_VERSION);
         cJSON_AddNumberToObject(row,"monotonic_ms",(double)v3_now());
         struct timespec now; clock_gettime(CLOCK_REALTIME,&now);
         cJSON_AddNumberToObject(row,"utc_ms",(double)now.tv_sec*1000 + now.tv_nsec/1000000);
@@ -37,18 +71,51 @@ void instrument_trace(const char *event, const char *capture, const char *gate, 
                 cJSON_Delete(fields);
             }
         }
-        char buffer[4096];
+        char buffer[2048];
+        if (!cJSON_PrintPreallocated(row,buffer,sizeof(buffer)-2,0)) {
+            cJSON_DeleteItemFromObjectCaseSensitive(row,"detail");
+            cJSON_AddBoolToObject(row,"truncated",1);
+            /* Rebuild an envelope rather than emitting broken JSON. */
+            if(!cJSON_PrintPreallocated(row,buffer,sizeof(buffer)-2,0)) {
+                cJSON_Delete(row);row=cJSON_CreateObject();
+                cJSON_AddStringToObject(row,"event",event);
+                cJSON_AddStringToObject(row,"capture_id",capture?capture:"");
+                cJSON_AddStringToObject(row,"boot_id",boot?boot:"");
+                cJSON_AddStringToObject(row,"run_id",run);
+                cJSON_AddNumberToObject(row,"sequence",(double)trace_sequence);
+                cJSON_AddNumberToObject(row,"monotonic_ms",(double)v3_now());
+                cJSON_AddNumberToObject(row,"utc_ms",(double)now.tv_sec*1000+now.tv_nsec/1000000);
+                cJSON_AddBoolToObject(row,"truncated",1);
+            }
+        }
         if (cJSON_PrintPreallocated(row,buffer,sizeof(buffer)-2,0)) {
             size_t n=strlen(buffer); buffer[n++]='\n';
-            int fd=open(STATE_DIR "/runtime.jsonl",O_CREAT|O_APPEND|O_WRONLY|O_CLOEXEC,0600);
-            if(fd>=0) { ssize_t written = write(fd,buffer,n); (void)written; close(fd); }
-        }
+            int fd=open(LOG_DIR "/runtime.jsonl",O_CREAT|O_APPEND|O_WRONLY|O_CLOEXEC,0600);
+            if(fd>=0) {
+                ssize_t written=write(fd,buffer,n);
+                if(written!=(ssize_t)n) trace_dropped++;
+                close(fd);
+            } else trace_dropped++;
+            int failed=strstr(event,"failed") || strstr(event,"error") || strstr(event,"watchdog") ||
+                (detail && (strstr(detail,"\"result\":\"failed\"") || strstr(detail,"\"ok\":false")));
+            if(failed) {
+                struct stat fault_st;
+                if(stat(LOG_DIR "/fault-marker.json",&fault_st) || time(NULL)-fault_st.st_mtime>=60) {
+                    char fault_id[128];snprintf(fault_id,sizeof(fault_id),"B-%ld-%llu",(long)getpid(),(unsigned long long)v3_now());
+                    cJSON_AddStringToObject(row,"fault_id",fault_id);
+                    (void)v3_save_json(LOG_DIR "/fault-marker.json",row);
+                }
+            }
+        } else trace_dropped++;
         cJSON_Delete(row);
     }
     guard.l_type=F_UNLCK; (void)fcntl(lock,F_SETLK,&guard); close(lock);
 }
 
 void instrument_trace_protocol(const cJSON *request, const cJSON *reply, const char *boot, const char *endpoint) {
+    const cJSON *operation=cJSON_GetObjectItemCaseSensitive(request,"op");
+    const cJSON *ok=cJSON_GetObjectItemCaseSensitive(reply,"ok");
+    if(cJSON_IsString(operation) && !strcmp(operation->valuestring,"hello_query") && cJSON_IsTrue(ok) && v3_now()>=trace_detail_until) return;
     cJSON *fields = cJSON_CreateObject(); if (!fields) return;
     const char *names[] = {"op", "device_id", "host_id", "gate_id", "capture_id", "event_id", "grant_id", "txn_id", "operation_id", "sequence", "nonce", "size_bytes", "sha256"};
     for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); i++) {

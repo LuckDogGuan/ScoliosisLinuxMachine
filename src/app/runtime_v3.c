@@ -1,6 +1,7 @@
 #include "v3.h"
 #include "policy.h"
 #include "platform.h"
+#include "evidence.h"
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
@@ -92,6 +93,12 @@ typedef struct {
     uint64_t diagnostics_checked_at;
     int diagnostics_preview;
     Worker record, upload, maintenance, notifier, audio, discard;
+    Worker evidence;
+    char evidence_fault[ID_SIZE], evidence_token[ID_SIZE], evidence_capture[ID_SIZE], evidence_boot[ID_SIZE];
+    char evidence_seen[ID_SIZE], evidence_status[24];
+    uint64_t evidence_check, evidence_due;
+    double evidence_utc;
+    cJSON *evidence_snapshot;
     char maintenance_type;
     char upload_id[ID_SIZE];
     char sounds[8][32]; unsigned sound_in, sound_out;
@@ -178,7 +185,7 @@ static int make_worker(Worker *worker, int *child_fd) {
 }
 static void child_isolate(Runtime *rt, int own_fd) {
     close(rt->udp);
-    Worker *workers[] = {&rt->record, &rt->upload, &rt->maintenance, &rt->notifier, &rt->audio, &rt->discard, &rt->diagnostics, &rt->recovery};
+    Worker *workers[] = {&rt->record, &rt->upload, &rt->maintenance, &rt->notifier, &rt->audio, &rt->discard, &rt->diagnostics, &rt->recovery, &rt->evidence};
     for (size_t i = 0; i < sizeof(workers)/sizeof(workers[0]); i++)
         if (workers[i]->pid > 0 && workers[i]->fd >= 0 && workers[i]->fd != own_fd) close(workers[i]->fd);
 }
@@ -308,7 +315,60 @@ static void notifier_messages(Runtime *rt) {
         rt->event_retry = v3_now() + (result.result ? 2000 : 0);
     } else if (!size) { finish_worker(&rt->notifier); rt->event_retry = v3_now() + 2000; }
 }
+static cJSON *evidence_snapshot(Runtime *rt) {
+    cJSON *state=cJSON_CreateObject();if(!state)return NULL;
+    cJSON_AddStringToObject(state,"boot_id",rt->boot);cJSON_AddStringToObject(state,"system_boot_id",rt->system_boot);
+    cJSON_AddNumberToObject(state,"utc_ms",(double)wall_ms());
+    cJSON_AddNumberToObject(state,"monotonic_ms",(double)v3_now());
+    cJSON_AddStringToObject(state,"phase",rt->phase);cJSON_AddStringToObject(state,"capture_id",rt->current_id);
+    cJSON_AddStringToObject(state,"gate_id",rt->gate_id);cJSON_AddBoolToObject(state,"capture_permission",rt->gate);
+    cJSON_AddBoolToObject(state,"camera_fault",rt->camera_fault);cJSON_AddNumberToObject(state,"free_mb",rt->free_mb);
+    cJSON_AddNumberToObject(state,"available_mb",rt->available_mb);cJSON_AddNumberToObject(state,"rssi",rt->rssi);
+    cJSON_AddStringToObject(state,"version",INSTRUMENT_VERSION);
+    cJSON_AddNumberToObject(state,"width",rt->config->width);cJSON_AddNumberToObject(state,"height",rt->config->height);
+    cJSON_AddNumberToObject(state,"fps",rt->config->fps);cJSON_AddNumberToObject(state,"bitrate_kbps",rt->config->bitrate_kbps);
+    cJSON_AddNumberToObject(state,"volume",rt->config->volume);return state;
+}
+static void evidence_tick(Runtime *rt,uint64_t now) {
+    if(rt->evidence.pid) {
+        int result;ssize_t n=recv(rt->evidence.fd,&result,sizeof(result),MSG_DONTWAIT);
+        if(n==(ssize_t)sizeof(result) || !n || now-rt->evidence.started>25000) {
+            if(now-rt->evidence.started>25000)abort_worker(&rt->evidence);else finish_worker(&rt->evidence);
+            COPY(rt->evidence_status,n==(ssize_t)sizeof(result) && !result?"collected":"failed");
+        }
+        return;
+    }
+    if(now<rt->evidence_check)return;
+    rt->evidence_check=now+2000;
+    if(!rt->evidence_fault[0]) {
+        cJSON *marker=v3_read_json(INSTRUMENT_LOG_DIR "/fault-marker.json");
+        if(marker && strcmp(str(marker,"fault_id"),rt->evidence_seen) && safe_id(str(marker,"fault_id"))) {
+            COPY(rt->evidence_seen,str(marker,"fault_id"));COPY(rt->evidence_fault,rt->evidence_seen);
+            COPY(rt->evidence_capture,str(marker,"capture_id"));COPY(rt->evidence_boot,str(marker,"boot_id"));
+            rt->evidence_utc=num(marker,"utc_ms");rt->evidence_due=now+15000;
+            rt->evidence_snapshot=evidence_snapshot(rt);
+            cJSON_AddItemToObject(rt->evidence_snapshot,"trigger",cJSON_Duplicate(marker,1));
+            COPY(rt->evidence_status,"pending");
+        }
+        cJSON_Delete(marker);
+    }
+    if(!rt->evidence_fault[0] || now<rt->evidence_due || rt->gate || rt->record.pid || rt->upload.pid || rt->completion_pending)return;
+    if(storage_free_mb()<100) {COPY(rt->evidence_status,"low_space");return;}
+    int fd,branch=make_worker(&rt->evidence,&fd);
+    if(!branch) {
+        child_isolate(rt,fd);
+        cJSON *body=evidence_build(rt->config,rt->evidence_snapshot,rt->evidence_fault,rt->evidence_capture,rt->evidence_boot,rt->evidence_utc);
+        int result=-1;
+        if(body) {
+            result=evidence_store(body);
+            if(rt->evidence_token[0])result=evidence_send(rt->config,body,rt->evidence_token);
+        }
+        cJSON_Delete(body);(void)send(fd,&result,sizeof(result),MSG_NOSIGNAL);_exit(0);
+    }
+    if(branch>0) {rt->evidence_fault[0]=0;rt->evidence_token[0]=0;cJSON_Delete(rt->evidence_snapshot);rt->evidence_snapshot=NULL;}
+}
 static void start_record(Runtime *rt) {
+    if(rt->evidence.pid) {abort_worker(&rt->evidence);COPY(rt->evidence_status,"interrupted_for_capture");}
     rt->prompt_fired=0;
     rt->capture_backlight = -1; rt->capture_backlight_verified = 0;
     long available, total;
@@ -774,7 +834,7 @@ static cJSON *base_reply(Runtime *rt, const cJSON *request) {
 static void hello_reply(Runtime *rt, cJSON *reply, uint64_t now) {
     cJSON_ReplaceItemInObjectCaseSensitive(reply, "ok", cJSON_CreateTrue());
     cJSON *capabilities = cJSON_AddArrayToObject(reply, "capabilities");
-    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard", "backlight_brightness", "speech_focus", "speech_preempt", "diagnostics_health_v1", "camera_settings_v1", "detection_status_voice_v1"};
+    static const char *const names[] = {"capture_gate", "capture_prepare", "capture_events", "upload_grant", "pair_transaction", "volume_control", "paired_discover", "time_sync", "diagnostics", "capture_discard", "backlight_brightness", "speech_focus", "speech_preempt", "diagnostics_health_v1", "camera_settings_v1", "detection_status_voice_v1", "evidence_v1"};
     for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); i++) cJSON_AddItemToArray(capabilities, cJSON_CreateString(names[i]));
     cJSON_AddStringToObject(reply, "paired_host_id", rt->revoking ? "" : rt->host);
     cJSON_AddNumberToObject(reply, "volume", rt->audio_volume);
@@ -785,6 +845,16 @@ static void hello_reply(Runtime *rt, cJSON *reply, uint64_t now) {
     cJSON_AddStringToObject(reply, "audio_operation_id", rt->audio_id);
     cJSON_AddNumberToObject(reply, "audio_operation_result", rt->audio_result);
     cJSON_AddStringToObject(reply, "uploading_capture_id", rt->upload_id);
+    cJSON *fault_marker=v3_read_json(INSTRUMENT_LOG_DIR "/fault-marker.json");
+    if(fault_marker) {
+        cJSON_AddStringToObject(reply,"fault_pending",str(fault_marker,"fault_id"));
+        cJSON *last_fault=cJSON_AddObjectToObject(reply,"last_fault");
+        cJSON_AddStringToObject(last_fault,"event",str(fault_marker,"event"));
+        cJSON_AddStringToObject(last_fault,"capture_id",str(fault_marker,"capture_id"));
+        cJSON_AddStringToObject(last_fault,"boot_id",str(fault_marker,"boot_id"));
+        cJSON_AddNumberToObject(last_fault,"utc_ms",num(fault_marker,"utc_ms"));
+        cJSON_Delete(fault_marker);
+    }
     cJSON_AddStringToObject(reply, "peer_ip", rt->peer_ip);
     const char *colon = strrchr(rt->config->pc_base_url, ':');
     cJSON_AddNumberToObject(reply, "http_port", colon ? atoi(colon + 1) : 0);
@@ -1009,7 +1079,7 @@ static void receive_udp(Runtime *rt, uint64_t now) {
         if (count < 2 || count > PACKET_SIZE) continue;
         buffer[count] = 0;
         cJSON *request = cJSON_ParseWithLength(buffer, (size_t)count + 1);
-        if (!request) continue;
+        if (!request) {instrument_trace("udp_rejected","","",rt->boot,"malformed_json");continue;}
         const char *op = str(request, "op");
         const char *nonce = str(request, "nonce");
         int version = (int)num(request, "version");
@@ -1028,11 +1098,12 @@ static void receive_udp(Runtime *rt, uint64_t now) {
         double sequence = num(request, "sequence");
         if (version != 3 || strcmp(str(request, "device_id"), rt->config->device_id) ||
             !safe_id(str(request, "host_id")) || !safe_id(nonce) || sequence < 0 || sequence > 9007199254740991.0 || sequence != (double)(uint64_t)sequence) {
+            instrument_trace("udp_rejected","","",rt->boot,"invalid_identity_or_sequence");
             cJSON_Delete(request); continue;
         }
         cJSON *reply = base_reply(rt, request);
         if (!reply) { cJSON_Delete(request); continue; }
-        int mutation = strcmp(op, "hello_query") && strcmp(op, "pending_query") && strcmp(op, "paired_discover");
+        int mutation = strcmp(op, "hello_query") && strcmp(op, "pending_query") && strcmp(op, "paired_discover") && strcmp(op,"evidence_status");
         int success = 0;
         if (!strcmp(op, "hello_query")) {
             if (rt->paired && !strcmp(rt->host,str(request,"host_id")) && !strcmp(rt->peer_ip,address)) rt->last_host_contact=now;
@@ -1045,6 +1116,7 @@ static void receive_udp(Runtime *rt, uint64_t now) {
         else if (strcmp(str(request, "boot_id"), rt->boot)) cJSON_AddStringToObject(reply, "error", "boot_mismatch");
         else if (mutation && sequence == (double)rt->sequence && !strcmp(nonce, rt->last_nonce) && !strcmp(op, rt->last_op) && rt->last_reply[0]) {
             (void)sendto(rt->udp, rt->last_reply, strlen(rt->last_reply), 0, (struct sockaddr *)&source, source_length);
+            instrument_trace("udp_duplicate","","",rt->boot,op);
             cJSON_Delete(reply); cJSON_Delete(request); continue;
         } else if (mutation && sequence <= (double)rt->sequence) cJSON_AddStringToObject(reply, "error", "stale_sequence");
         else if (rt->revoking) cJSON_AddStringToObject(reply, "error", "revoking");
@@ -1089,6 +1161,23 @@ static void receive_udp(Runtime *rt, uint64_t now) {
             cJSON_AddStringToObject(reply, "event_id", str(request, "event_id"));
         } else if (!rt->paired || strcmp(rt->host, str(request, "host_id")) || strcmp(rt->peer_ip, address)) {
             cJSON_AddStringToObject(reply, "error", "host_not_paired");
+        } else if (!strcmp(op,"evidence_collect")) {
+            const char *id=str(request,"fault_id"),*token=str(request,"token");
+            if(!safe_id(id) || !safe_id(token))cJSON_AddStringToObject(reply,"error","invalid_evidence_id");
+            else if(rt->evidence.pid || rt->evidence_fault[0])cJSON_AddStringToObject(reply,"error","evidence_busy");
+            else {
+                COPY(rt->evidence_fault,id);COPY(rt->evidence_token,token);
+                COPY(rt->evidence_capture,str(request,"target_capture_id"));COPY(rt->evidence_boot,str(request,"target_boot_id"));
+                rt->evidence_utc=num(request,"utc_ms");rt->evidence_due=now;
+                rt->evidence_snapshot=evidence_snapshot(rt);COPY(rt->evidence_status,"pending");success=1;
+            }
+            cJSON_AddStringToObject(reply,"fault_id",id);
+        } else if (!strcmp(op,"evidence_detail")) {
+            double duration=num(request,"duration_ms");
+            if(duration>=0 && duration<=600000) {instrument_trace_detail(now+(uint64_t)duration);success=1;}
+            else cJSON_AddStringToObject(reply,"error","invalid_detail_duration");
+        } else if (!strcmp(op,"evidence_status")) {
+            cJSON_AddStringToObject(reply,"status",rt->evidence_status);success=1;
         } else if (!strcmp(op, "capture_discard")) {
             success = begin_discard(rt, request, reply);
         } else if (!strcmp(op, "time_sync")) {
@@ -1222,6 +1311,8 @@ static void receive_udp(Runtime *rt, uint64_t now) {
         } else if (!strcmp(op, "upload_grant")) begin_upload(rt, request, reply);
         else cJSON_AddStringToObject(reply, "error", "unknown_op");
         if (success) cJSON_ReplaceItemInObjectCaseSensitive(reply, "ok", cJSON_CreateTrue());
+        if(!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(reply,"ok")) && !cJSON_GetObjectItemCaseSensitive(reply,"error"))
+            cJSON_AddStringToObject(reply,"error","precondition_not_met");
         char endpoint[96]; snprintf(endpoint,sizeof(endpoint),"%s:%u",address,(unsigned)ntohs(source.sin_port));
         instrument_trace_protocol(request,reply,rt->boot,endpoint);
         if (mutation && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(reply, "ok"))) {
@@ -1373,6 +1464,12 @@ int runtime_run(Config *config) {
     char startup[256];
     snprintf(startup,sizeof(startup),"{\"system_boot_id\":\"%s\",\"pid\":%ld,\"version\":\"%s\"}",rt.system_boot,(long)getpid(),INSTRUMENT_VERSION);
     instrument_trace("application_started","","",rt.boot,startup);
+    cJSON *previous_run=v3_read_json(INSTRUMENT_LOG_DIR "/run-state.json");
+    if(previous_run && !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(previous_run,"closed")))
+        instrument_trace("previous_exit_error","","",rt.boot,"unclean_exit_or_power_loss");
+    cJSON_Delete(previous_run);
+    cJSON *run_state=cJSON_CreateObject();cJSON_AddBoolToObject(run_state,"closed",0);
+    (void)v3_save_json(INSTRUMENT_LOG_DIR "/run-state.json",run_state);cJSON_Delete(run_state);
     syslog(LOG_INFO, "V3 coordinator boot=%s, gate disabled, buttons gpio3/gpio4/gpio0", rt.boot);
     while (active) {
         uint64_t now = v3_now();
@@ -1420,6 +1517,7 @@ int runtime_run(Config *config) {
         }
         if (rt.keys != 5 || now < rt.diagnostics_lease) (void)capture_gesture(&rt,now);
         diagnostics_tick(&rt,now);
+        evidence_tick(&rt,now);
         record_messages(&rt);
         if (rt.completion_pending && !rt.record.pid && now >= rt.completion_retry) {
             WorkerResult retry = rt.completion; completed(&rt, &retry);
@@ -1466,7 +1564,11 @@ int runtime_run(Config *config) {
     }
     buttons_close();
     instrument_trace("application_stopping","","",rt.boot,"signal");
+    cJSON *closed_run=cJSON_CreateObject();cJSON_AddBoolToObject(closed_run,"closed",1);
+    (void)v3_save_json(INSTRUMENT_LOG_DIR "/run-state.json",closed_run);cJSON_Delete(closed_run);
     cJSON_Delete(rt.last_completed);
+    cJSON_Delete(rt.evidence_snapshot);
+    if(rt.evidence.pid)abort_worker(&rt.evidence);
     if (rt.recovery.pid) abort_worker(&rt.recovery);
     if (rt.diagnostics.pid) abort_worker(&rt.diagnostics);
     if (rt.notifier.pid) abort_worker(&rt.notifier);
