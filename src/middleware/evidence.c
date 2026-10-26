@@ -9,6 +9,7 @@
 #include <time.h>
 #include <errno.h>
 #define LIMIT (512*1024)
+#define EVIDENCE_RETENTION_SECONDS (30*86400)
 static const char *text(const cJSON *o,const char *k) {
     const cJSON *v=cJSON_GetObjectItemCaseSensitive(o,k);return cJSON_IsString(v)?v->valuestring:"";
 }
@@ -47,7 +48,7 @@ static cJSON *read_body(const char *path) {
 cJSON *evidence_build(const Config *config,const cJSON *snapshot,const char *fault,const char *capture,const char *boot,double utc) {
     for(int i=0;i<8;i++) {
         char path[256];snprintf(path,sizeof(path),INSTRUMENT_LOG_DIR "/fault-%d.json",i);
-        struct stat st;if(lstat(path,&st) || time(NULL)-st.st_mtime>7*86400)continue;
+        struct stat st;if(lstat(path,&st) || time(NULL)-st.st_mtime>EVIDENCE_RETENTION_SECONDS)continue;
         cJSON *saved=read_body(path);if(!saved)continue;
         const cJSON *when=cJSON_GetObjectItemCaseSensitive(saved,"utc_ms");
         int related=(capture[0] && !strcmp(text(saved,"capture_id"),capture)) ||
@@ -99,7 +100,7 @@ int evidence_store(const cJSON *body) {
     char path[256],old[256];struct stat st;
     for(int i=7;i>=0;i--) {
         snprintf(path,sizeof(path),INSTRUMENT_LOG_DIR "/fault-%d.json",i);
-        if(!lstat(path,&st) && (time(NULL)-st.st_mtime>7*86400 || i==7)) (void)unlink(path);
+        if(!lstat(path,&st) && (time(NULL)-st.st_mtime>EVIDENCE_RETENTION_SECONDS || i==7)) (void)unlink(path);
         if(i<7) {snprintf(old,sizeof(old),INSTRUMENT_LOG_DIR "/fault-%d.json",i+1);(void)rename(path,old);}
     }
     return save_body(INSTRUMENT_LOG_DIR "/fault-0.json",body);

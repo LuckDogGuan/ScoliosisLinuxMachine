@@ -93,7 +93,28 @@ static void package_check(Config *config) {
     cJSON *saved=evidence_build(config,snap,"F-later","capture-test","boot-test",(double)wall_ms());
     assert(saved && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(saved,"historical")));
     assert(!strcmp(str(saved,"fault_id"),"F-later"));
-    cJSON_Delete(saved);cJSON_Delete(body);cJSON_Delete(snap);
+    cJSON_Delete(saved);
+    time_t now=time(NULL);struct timespec times[2]={{.tv_sec=now-31*86400},{.tv_sec=now-31*86400}};
+    for(int i=0;i<8;i++) {
+        char path[256];snprintf(path,sizeof(path),INSTRUMENT_LOG_DIR "/fault-%d.json",i);
+        assert(!utimensat(AT_FDCWD,path,times,0));
+    }
+    for(int age=8;age<=29;age+=21) {
+        times[0].tv_sec=times[1].tv_sec=now-age*86400;
+        assert(!utimensat(AT_FDCWD,INSTRUMENT_LOG_DIR "/fault-0.json",times,0));
+        saved=evidence_build(config,snap,"F-retained","capture-test","boot-test",(double)wall_ms());
+        assert(saved && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(saved,"historical")));
+        cJSON_Delete(saved);
+    }
+    times[0].tv_sec=times[1].tv_sec=now-31*86400;
+    assert(!utimensat(AT_FDCWD,INSTRUMENT_LOG_DIR "/fault-0.json",times,0));
+    saved=evidence_build(config,snap,"F-expired","capture-test","boot-test",(double)wall_ms());
+    assert(saved && !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(saved,"historical")));
+    cJSON_Delete(saved);
+    assert(!evidence_store(body));
+    assert(stat(INSTRUMENT_LOG_DIR "/fault-1.json",&st));
+    cJSON_Delete(body);cJSON_Delete(snap);
+    puts("PASS 8-day and 29-day evidence reuse, 31-day expiry and old-slot cleanup");
     puts("PASS 512KiB evidence cap, 8-slot 4MiB retention and historical re-collection");
 }
 int main(void) {
