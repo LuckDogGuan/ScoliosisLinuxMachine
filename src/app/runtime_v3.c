@@ -1306,8 +1306,8 @@ static void receive_udp(Runtime *rt, uint64_t now) {
                         cJSON_AddItemToArray(list, item);
                     }
                     cJSON_AddNumberToObject(reply, "next_offset", next); success = 1;
-                }
-            }
+                } else cJSON_AddStringToObject(reply, "error", "pending_storage_unavailable");
+            } else cJSON_AddStringToObject(reply, "error", "invalid_pending_query");
         } else if (!strcmp(op, "upload_grant")) begin_upload(rt, request, reply);
         else cJSON_AddStringToObject(reply, "error", "unknown_op");
         if (success) cJSON_ReplaceItemInObjectCaseSensitive(reply, "ok", cJSON_CreateTrue());

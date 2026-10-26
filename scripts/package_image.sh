@@ -20,7 +20,12 @@ printf '%s\n' "$version" > "$package/VERSION"
 printf 'version=%s\nrelease_tag=instrument-v%s\nsource_commit=%s\nbuild_utc=%s\n' \
   "$version" "$version" "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$package/BUILD.txt"
 printf 'Complete ARM/uClibc application payload. Keep config, pairing, state and recordings.\nSee deploy/README.md and docs/light-test.md for light commands/acceptance.\n' > "$package/README.txt"
-cp docs/light-test.md "releases/$version/VERSION.md"
+# Version notes come from this version's changelog, never a fixed old feature doc.
+awk -v heading="# $version " '
+    /^# / { if (keep) exit; if (index($0, heading) == 1) keep=1 }
+    keep { print }
+' CHANGELOG.md > "releases/$version/VERSION.md"
+[ -s "releases/$version/VERSION.md" ] || { echo "Missing changelog entry for $version" >&2; exit 2; }
 cp "$package/BUILD.txt" "releases/$version/BUILD.txt"
 (cd "$package"; find . -type f ! -name SHA256SUMS -print | LC_ALL=C sort | xargs sha256sum > SHA256SUMS; cp SHA256SUMS SOURCE_SHA256SUMS; find . -type f ! -name SHA256SUMS -print | LC_ALL=C sort | xargs sha256sum > SHA256SUMS; sh deploy/install_bundle.sh --check)
 bash scripts/package_bundle.sh "$version"

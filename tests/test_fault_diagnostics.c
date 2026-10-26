@@ -24,6 +24,9 @@ static void command(Runtime *rt,const char *op,const char *host,const char *nonc
 static void protocol_check(Config *config) {
     Runtime rt={.config=config,.udp=-1,.paired=1,.gate=1,.free_mb=1000};
     COPY(rt.host,"host-test");COPY(rt.boot,"boot-test");COPY(rt.peer_ip,"127.0.0.1");
+    packet="{\"version\":3,\"device_id\":\"CAM-test\",\"boot_id\":\"boot-test\",\"host_id\":\"host-test\",\"op\":\"pending_query\",\"nonce\":\"invalid-page\",\"sequence\":0,\"offset\":0,\"limit\":16}";
+    answer[0]=0;receive_udp(&rt,v3_now());
+    assert(strstr(answer,"invalid_pending_query") && !strstr(answer,"precondition_not_met"));
     command(&rt,"evidence_collect","wrong-host","nonce-wrong",1);
     assert(!rt.evidence_fault[0] && strstr(answer,"host_not_paired"));
     command(&rt,"evidence_collect","host-test","nonce-good",2);

@@ -22,6 +22,12 @@ with tempfile.TemporaryDirectory(prefix="instrument-bundle-check-") as temporary
             assert member.isdir() or member.isfile(), "No archive links/devices allowed"
         stream.extractall(work)
     package = work / tops.pop()
+    version = (package / "VERSION").read_text().strip()
+    notes = archive.parent / "VERSION.md"
+    if notes.exists():
+        assert version in notes.read_text().splitlines()[0], "Release notes must name this exact version"
+    assert ("version=" + version + "\n") in (archive.parent / "BUILD.txt").read_text()
+
     script = package / "deploy/install_bundle.sh"
 
     def run(*args, success):
