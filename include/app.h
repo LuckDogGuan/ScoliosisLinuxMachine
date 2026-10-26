@@ -9,7 +9,7 @@
 
 #include <stddef.h>
 
-#define INSTRUMENT_VERSION "3.3.36"
+#define INSTRUMENT_VERSION "3.4.0"
 #ifndef INSTRUMENT_BUILD
 #define INSTRUMENT_BUILD "development"
 #endif
